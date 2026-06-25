@@ -209,7 +209,7 @@ ci=new Chart(cc.value,{type:'bar',data:{labels,datasets:[
 }
 
 async function refreshCharts(){const d=await fetchTrends();await nextTick();buildCharts(d)}
-async function refreshAll(){await fetch('/api/refresh',{method:'POST'});await Promise.all([fetchProfiles(),fetchModels(),fetchStats(),fetchLogs()]);if(tab.value==='providers')await fetchProviders();await refreshCharts();lastRefresh.value=new Date().toLocaleTimeString()}
+async function refreshAll(){await fetch('/api/refresh',{method:'POST'});await Promise.all([fetchProfiles(),fetchModels(),fetchStats(),fetchLogs()]);if(tab.value==='providers')await fetchProviders();await refreshCharts();lastRefresh.value=new Date().toLocaleTimeString('zh-CN',{timeZone:timezoneFilter.value,hour:'2-digit',minute:'2-digit',second:'2-digit'})}
 function onTab(t){tab.value=t;if(t==='providers')fetchProviders();if(t==='logs')fetchLogs()}
 
 onMounted(async()=>{await refreshAll();if(refreshMs.value>0)timer=setInterval(refreshAll,refreshMs.value)})
