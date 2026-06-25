@@ -1,0 +1,22 @@
+[project]
+name = "hermes-token-dash"
+version = "1.2.0"
+description = "Multi-interface dashboard for AI token consumption analytics"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.20",
+    "textual>=0.80",
+    "pywebview>=5.0",
+]
+
+[project.optional-dependencies]
+desktop = ["pywebview>=5.0"]
+tui = ["textual>=0.80"]
+all = ["pywebview>=5.0", "textual>=0.80"]
+
+[project.scripts]
+hermes-token-dash = "main:main"
+
+[tool.uv]
+dev-dependencies = ["pytest>=8.0"]
