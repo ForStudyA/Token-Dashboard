@@ -1,28 +1,39 @@
 <!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>Hermes 仪表盘</title>
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
 body{background:#0a0e14;color:#bfc9d9;font-family:'Segoe UI',sans-serif;padding:40px;font-size:18px;}
 h1{color:#39bae6;} .ok{color:#7fd962;} .err{color:#f26d78;}
+.chart-box{background:#181e28;border:1px solid #1e2836;border-radius:10px;padding:16px;max-width:700px;height:260px;margin-top:16px;}
 </style></head>
 <body>
 <div id="app">
   <h1>Hermes 仪表盘</h1>
-  <p v-if="ready" class="ok">✅ Vue 挂载成功！请求数: {{ summary.requests }} | 费用: ¥{{ summary.cost }}</p>
-  <p v-if="!ready">⏳ 加载数据中...</p>
+  <p v-if="ready" class="ok">✅ Vue + Chart.js + API 全部正常！请求数: {{ summary.requests }}</p>
+  <p v-if="!ready">⏳ 加载中...</p>
   <p v-if="error" class="err">❌ {{ error }}</p>
+  <div class="chart-box"><canvas ref="c"></canvas></div>
 </div>
 <script>
-const {createApp,ref,onMounted}=Vue
+const {createApp,ref,onMounted,nextTick}=Vue
 createApp({setup(){
-  const ready=ref(false),summary=ref({}),error=ref('')
+  const ready=ref(false),summary=ref({}),error=ref(''),c=ref(null)
   onMounted(async()=>{
     try{
-      const r=await fetch('/api/summary')
-      const d=await r.json()
-      summary.value=d; ready.value=true
+      const r=await fetch('/api/summary'); summary.value=await r.json()
+      const tr=await fetch('/api/trends?time=7d'); const trends=await tr.json()
+      await nextTick()
+      new Chart(c.value,{type:'bar',data:{
+        labels:trends.map(d=>d.date),
+        datasets:[{label:'请求数',data:trends.map(d=>d.requests),backgroundColor:'rgba(57,186,230,0.6)'}]
+      },options:{responsive:true,maintainAspectRatio:false,animation:false,
+        plugins:{legend:{labels:{color:'#5c6778'}}},
+        scales:{x:{ticks:{color:'#5c6778'}},y:{ticks:{color:'#5c6778'}}}
+      }})
+      ready.value=true
     }catch(e){error.value=e.message}
   })
-  return{ready,summary,error}
+  return{ready,summary,error,c}
 }}).mount('#app')
 </script></body></html>
