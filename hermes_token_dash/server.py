@@ -188,11 +188,13 @@ def api_logs(time: str = Query("all"), model: str = Query(""),
 
 
 @app.get("/api/trends")
-def api_trends(time: str = Query("30d"), source: str = Query("")):
+def api_trends(time: str = Query("30d"), source: str = Query(""), model: str = Query("")):
     """Return daily aggregated data for charts: [{date, requests, input, output, cache_read, cost}]."""
     records = _get_records()
     if source:
         records = [r for r in records if r.data_source == source]
+    if model:
+        records = [r for r in records if r.model == model]
     stats = aggregate_by_model_date(records, time)
 
     daily: dict[str, dict] = {}

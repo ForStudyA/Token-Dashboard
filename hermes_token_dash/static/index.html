@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Hermes 令牌用量仪表盘</title>
+<title>Hermes Token 用量仪表盘</title>
 <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
 <style>
@@ -186,7 +186,7 @@
 
   .th-stats { display:grid; grid-template-columns: 1.5fr 100px repeat(2,100px) 90px 100px 80px; gap:8px; }
   .th-providers { display:grid; grid-template-columns: 1fr 100px 110px 110px 80px 100px 80px; gap:8px; }
-  .th-logs { display:grid; grid-template-columns: 90px 100px 130px 70px 60px 60px 60px 50px 70px 60px; gap:6px; }
+  .th-logs { display:grid; grid-template-columns: 80px 180px 70px 60px 70px 60px 60px 70px 80px; gap:6px; }
 
   .row-stats, .row-provider {
     display:grid; padding:8px 16px; gap:8px; font-size:13px;
@@ -199,7 +199,7 @@
   .row-sep { border-bottom:2px solid var(--border); padding:0; height:0; }
 
   .row-log {
-    display:grid; grid-template-columns: 90px 100px 130px 70px 60px 60px 60px 50px 70px 60px;
+    display:grid; grid-template-columns: 80px 180px 70px 60px 70px 60px 60px 70px 80px;
     padding:8px 16px; gap:6px; font-size:13px;
     border-bottom:1px solid rgba(48,54,61,.4); align-items:center; transition:background .1s;
   }
@@ -331,65 +331,13 @@
 
     <!-- main -->
     <div class="main">
-      <!-- hero: 3 张主卡 -->
-      <div class="hero-row">
-        <div class="hero-card">
-          <div class="hero-label">令牌总量</div>
-          <div class="hero-value">{{ fmt(realTotalTokens) }}</div>
-          <div class="hero-sub">输入 + 输出 + 缓存</div>
+      <!-- 左右图表 -->
+      <div class="charts-row">
+        <div class="chart-box" style="flex:1;">
+          <canvas ref="tokenChart"></canvas>
         </div>
-        <div class="hero-card">
-          <div class="hero-label">请求次数</div>
-          <div class="hero-value">{{ fmt(summary.requests) }}</div>
-          <div class="hero-sub">{{ summary.groups }} 个模型-日期分组</div>
-        </div>
-        <div class="hero-card">
-          <div class="hero-label">预估费用</div>
-          <div class="hero-value">¥{{ summary.cost }}</div>
-          <div class="hero-sub">基于模型定价估算</div>
-        </div>
-      </div>
-
-      <!-- 四项小卡 -->
-      <div class="mini-row">
-        <div class="mini-card">
-          <div class="mini-label">输入令牌</div>
-          <div class="mini-value">{{ fmt(summary.input) }}</div>
-        </div>
-        <div class="mini-card">
-          <div class="mini-label">输出令牌</div>
-          <div class="mini-value">{{ fmt(summary.output) }}</div>
-        </div>
-        <div class="mini-card">
-          <div class="mini-label">缓存写入</div>
-          <div class="mini-value">{{ fmt(totalCacheCreate) }}</div>
-        </div>
-        <div class="mini-card">
-          <div class="mini-label">缓存读取</div>
-          <div class="mini-value">{{ fmt(totalCacheRead) }}</div>
-        </div>
-        <!-- 缓存命中率环形图 -->
-        <div class="ring-card">
-          <svg class="ring-svg" width="56" height="56" viewBox="0 0 56 56">
-            <circle cx="28" cy="28" r="22" fill="none" stroke="var(--border)" stroke-width="5"/>
-            <circle cx="28" cy="28" r="22" fill="none"
-              :stroke="hitRingColor" stroke-width="5"
-              stroke-linecap="round" transform="rotate(-90 28 28)"
-              :stroke-dasharray="hitRingDash"
-              style="transition: stroke-dasharray .6s ease, stroke .3s;"/>
-            <text x="28" y="32" text-anchor="middle" font-size="12" font-weight="700" fill="var(--white)">{{ summary.hit_rate }}%</text>
-          </svg>
-          <div class="ring-info">
-            <div class="ring-label">缓存命中率</div>
-            <div class="ring-value" :class="hitColor(summary.hit_rate)">{{ summary.hit_rate }}%</div>
-          </div>
-        </div>
-      </div>
-
-      <!-- chart -->
-      <div class="chart-wrap">
-        <div class="chart-box">
-          <canvas ref="chartCanvas"></canvas>
+        <div class="chart-box" style="flex:1;">
+          <canvas ref="costChart"></canvas>
         </div>
       </div>
 
@@ -440,8 +388,8 @@
         <div class="topic-header th-providers">
           <span>提供商</span>
           <span class="text-right">请求数</span>
-          <span class="text-right">输入令牌</span>
-          <span class="text-right">输出令牌</span>
+          <span class="text-right">输入token</span>
+          <span class="text-right">输出token</span>
           <span class="text-center">成功率</span>
           <span class="text-right">费用</span>
           <span class="text-right">延迟</span>
@@ -465,7 +413,6 @@
         <div class="topic-header th-logs">
           <span>来源</span>
           <span>模型</span>
-          <span>请求 ID</span>
           <span class="text-right">输入</span>
           <span class="text-right">输出</span>
           <span class="text-right">缓存</span>
@@ -477,8 +424,7 @@
         <template v-if="logItems.length">
           <div class="row-log" v-for="log in logItems" :key="log.request_id">
             <span><span class="source-badge" :class="log.data_source === 'hermes' ? 'source-hermes' : 'source-claude'">{{ log.data_source === 'hermes' ? 'Hermes' : 'Claude' }}</span></span>
-            <span class="truncate">{{ log.model }}</span>
-            <span class="truncate" :title="log.request_id">{{ shortId(log.request_id) }}</span>
+            <span class="truncate" :title="log.model">{{ log.model }}</span>
             <span class="text-right">{{ fmt(log.input_tokens) }}</span>
             <span class="text-right">{{ fmt(log.output_tokens) }}</span>
             <span class="text-right">
@@ -594,10 +540,6 @@ createApp({
       if (!iso) return ''
       return new Date(iso).toLocaleTimeString(undefined, {hour:'2-digit',minute:'2-digit',second:'2-digit'})
     }
-    function shortId(id) {
-      if (!id) return ''
-      return id.length > 16 ? id.slice(0,8)+'…'+id.slice(-6) : id
-    }
     function toggleSort(field) {
       if (sortField.value === field) sortDir.value *= -1
       else { sortField.value = field; sortDir.value = 1 }
@@ -673,25 +615,50 @@ createApp({
       if (chartInstance) { chartInstance.destroy(); chartInstance = null }
       if (!data || !data.length) return
 
+      const labels = data.map(d => d.date)
+      const reqData = data.map(d => d.requests)
+      const cacheMiss = data.map(d => Math.max(0, Math.round((d.input - d.cache_read) / 1000)))
+      const cacheHit = data.map(d => Math.round(d.cache_read / 1000))
+      const outData = data.map(d => Math.round(d.output / 1000))
+
       chartInstance = new Chart(chartCanvas.value, {
-        type: 'line',
+        type: 'bar',
         data: {
-          labels: data.map(d => d.date),
+          labels,
           datasets: [
             {
               label: '请求次数',
-              data: data.map(d => d.requests),
+              data: reqData,
+              backgroundColor: 'rgba(57,186,230,0.6)',
               borderColor: '#39bae6',
-              backgroundColor: 'rgba(57,186,230,0.08)',
-              fill: true, tension: 0.3, pointRadius: 3,
+              borderWidth: 1,
               yAxisID: 'y',
             },
             {
-              label: '输入令牌 (K)',
-              data: data.map(d => Math.round(d.input / 1000)),
+              label: '未命中',
+              data: cacheMiss,
+              backgroundColor: 'rgba(127,217,98,0.65)',
               borderColor: '#7fd962',
-              backgroundColor: 'rgba(127,217,98,0.06)',
-              fill: true, tension: 0.3, pointRadius: 3,
+              borderWidth: 1,
+              stack: 'input',
+              yAxisID: 'y1',
+            },
+            {
+              label: '缓存命中',
+              data: cacheHit,
+              backgroundColor: 'rgba(127,217,98,0.25)',
+              borderColor: '#7fd962',
+              borderWidth: 1,
+              stack: 'input',
+              yAxisID: 'y1',
+            },
+            {
+              label: '输出',
+              data: outData,
+              backgroundColor: 'rgba(160,200,120,0.45)',
+              borderColor: '#a0c878',
+              borderWidth: 1,
+              stack: 'input',
               yAxisID: 'y1',
             },
           ],
@@ -706,8 +673,8 @@ createApp({
           },
           scales: {
             x: { ticks:{color:'#5c6778',font:{size:11}}, grid:{color:'rgba(30,40,54,0.5)'} },
-            y: { type:'linear',position:'left', title:{display:true,text:'请求次数',color:'#5c6778',font:{size:10}}, ticks:{color:'#5c6778',font:{size:10}}, grid:{color:'rgba(30,40,54,0.3)'} },
-            y1: { type:'linear',position:'right', title:{display:true,text:'输入令牌(K)',color:'#5c6778',font:{size:10}}, ticks:{color:'#5c6778',font:{size:10}}, grid:{drawOnChartArea:false} },
+            y: { type:'linear',position:'left', title:{display:true,text:'请求次数',color:'#5c6778',font:{size:10}}, ticks:{color:'#5c6778',font:{size:10}}, grid:{color:'rgba(30,40,54,0.3)'}, beginAtZero:true },
+            y1: { type:'linear',position:'right', title:{display:true,text:'输入token(K)',color:'#5c6778',font:{size:10}}, ticks:{color:'#5c6778',font:{size:10}}, grid:{drawOnChartArea:false}, beginAtZero:true, stacked:true },
           },
         },
       })
@@ -772,7 +739,7 @@ createApp({
       timeLabel, logTotalPages, realTotalTokens, totalCacheRead, totalCacheCreate,
       sortedStats, hitRingDash, hitRingColor,
       // methods
-      fmt, hitColor, shortTime, shortId, toggleSort, sortIcon,
+      fmt, hitColor, shortTime, toggleSort, sortIcon,
       refreshAll, onFilterChange, onTabChange, onRefreshChange, fetchLogs, goToPage,
     }
   }
