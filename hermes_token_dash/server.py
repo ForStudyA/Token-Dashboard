@@ -197,6 +197,8 @@ def api_summary(time: str = Query("all"), model: str = Query(""), source: str = 
 
     ti = sum(s.total_input for s in stats)
     to = sum(s.total_output for s in stats)
+    tcr = sum(s.total_cache_read for s in stats)
+    tcc = sum(s.total_cache_creation for s in stats)
     tc = sum(s.estimated_cost for s in stats)
     tr = sum(s.request_count for s in stats)
     trc = sum(s.requests_with_cache for s in stats)
@@ -205,6 +207,8 @@ def api_summary(time: str = Query("all"), model: str = Query(""), source: str = 
     return {
         "input": ti,
         "output": to,
+        "cache_read": tcr,
+        "cache_create": tcc,
         "cost": round(tc, 2),
         "requests": tr,
         "hit_rate": hit,

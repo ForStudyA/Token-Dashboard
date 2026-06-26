@@ -119,8 +119,8 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,san
 <div class="srow"><span class="l">输入</span><span class="v">{{fmt(summary.input)}}</span></div>
 <div class="srow"><span class="l">输出</span><span class="v">{{fmt(summary.output)}}</span></div>
 <hr class="sdiv">
-<div class="srow"><span class="l">缓存读取</span><span class="v g">{{fmt(totalCR)}}</span></div>
-<div class="srow"><span class="l">缓存写入</span><span class="v">{{fmt(totalCC)}}</span></div>
+<div class="srow"><span class="l">缓存读取</span><span class="v g">{{fmt(summary.cache_read)}}</span></div>
+<div class="srow"><span class="l">缓存写入</span><span class="v">{{fmt(summary.cache_create)}}</span></div>
 <hr class="sdiv">
 <div class="srow"><span class="l">费用</span><span class="v g">¥{{summary.cost}}</span></div>
 <div class="srow"><span class="l">命中率</span><span class="v" :class="hitColor(summary.hit_rate)">{{summary.hit_rate}}%</span></div></div>
@@ -175,8 +175,6 @@ const pstats=ref([])
 const profiles=ref([]),profileFilter=ref(''),sources=ref([]),agents=ref([]),agentFilter=ref('')
 
 const timeLabel=computed(()=>({all:'全部',today:'今天','7d':'最近7天','30d':'最近30天'}[timeFilter.value]))
-const totalCR=computed(()=>stats.value.reduce((s,r)=>s+(r.cache_read||0),0))
-const totalCC=computed(()=>stats.value.reduce((s,r)=>s+(r.cache_create||0),0))
 const sorted=computed(()=>{let a=[...stats.value];a.sort((x,y)=>{let vx=x[sf.value]??'',vy=y[sf.value]??'';if(typeof vx==='string'){vx=vx.toLowerCase();vy=vy.toLowerCase()}return vx>vy?sd.value:vx<vy?-sd.value:0});return a})
 
 function fmt(n){if(n==null)return'0';if(n>=1e9)return(n/1e9).toFixed(2)+'B';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(0)+'K';return String(n)}
@@ -202,9 +200,9 @@ if(ci){ci.destroy();ci=null}
 if(!data||!data.length)return
 const labels=data.map(d=>d.date)
 ti=new Chart(tc.value,{type:'bar',data:{labels,datasets:[
-{label:'未命中',data:data.map(d=>Math.max(0,Math.round((d.input-d.cache_read)/1000))),backgroundColor:'rgba(127,217,98,0.65)',borderColor:'#7fd962',borderWidth:1,stack:'s',maxBarThickness:50},
-{label:'缓存命中',data:data.map(d=>Math.round(d.cache_read/1000)),backgroundColor:'rgba(127,217,98,0.25)',borderColor:'#7fd962',borderWidth:1,stack:'s'},
-{label:'输出',data:data.map(d=>Math.round(d.output/1000)),backgroundColor:'rgba(160,200,120,0.45)',borderColor:'#a0c878',borderWidth:1,stack:'s'}
+{label:'未命中',data:data.map(d=>Math.max(0,Math.round((d.input-d.cache_read)/1000))),backgroundColor:'rgba(127,217,98,0.65)',borderColor:'#7fd962',borderWidth:1,stack:'s',barPercentage:0.6,maxBarThickness:50},
+{label:'缓存命中',data:data.map(d=>Math.round(d.cache_read/1000)),backgroundColor:'rgba(127,217,98,0.25)',borderColor:'#7fd962',borderWidth:1,stack:'s',maxBarThickness:50},
+{label:'输出',data:data.map(d=>Math.round(d.output/1000)),backgroundColor:'rgba(160,200,120,0.45)',borderColor:'#a0c878',borderWidth:1,stack:'s',maxBarThickness:50}
 ]},options:{responsive:true,maintainAspectRatio:false,animation:false,plugins:{legend:{position:'top',labels:{color:'#5c6778',boxWidth:10,padding:8,font:{size:10}}},tooltip:{backgroundColor:'#181e28',titleColor:'#e6eaf0',bodyColor:'#bfc9d9'},title:{display:true,text:'Token 消耗 (K)',color:'#5c6778',font:{size:11}}},scales:{x:{ticks:{color:'#5c6778',font:{size:9}}},y:{stacked:true,ticks:{color:'#5c6778',font:{size:9}},beginAtZero:true}}}})
 ci=new Chart(cc.value,{type:'bar',data:{labels,datasets:[
 {label:'费用',data:data.map(d=>parseFloat(d.cost)||0),backgroundColor:'rgba(230,180,80,0.5)',borderColor:'#e6b450',borderWidth:1,maxBarThickness:50}
@@ -220,6 +218,6 @@ onMounted(async()=>{await refreshAll();if(refreshMs.value>0)timer=setInterval(re
 watch(refreshMs,(val)=>{if(timer){clearInterval(timer);timer=null}if(val>0)timer=setInterval(refreshAll,val)})
 onUnmounted(()=>{if(timer)clearInterval(timer)})
 
-return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,profileFilter,profiles,activeModel,refreshMs,timezoneFilter,lastRefresh,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,sources,agents,agentFilter,timeLabel,totalCR,totalCC,sorted,fmt,hitColor,stime,toggleSort,refreshAll,refreshView,onTab,fetchLogs}
+return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,profileFilter,profiles,activeModel,refreshMs,timezoneFilter,lastRefresh,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,sources,agents,agentFilter,timeLabel,sorted,fmt,hitColor,stime,toggleSort,refreshAll,refreshView,onTab,fetchLogs}
 }}).mount('#app')
 </script></body></html>
