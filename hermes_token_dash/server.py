@@ -39,9 +39,10 @@ STATIC = Path(__file__).parent / "static"
 STATIC.mkdir(exist_ok=True)
 app.mount("/static", StaticFiles(directory=str(STATIC)), name="static")
 
-# Cache parsed data
+# Cache parsed data with TTL (auto-refresh after 30 seconds)
 _cache: list = []
-_cache_time: str = ""
+_cache_time: float = 0.0
+CACHE_TTL: float = 30.0  # seconds
 
 
 @app.on_event("startup")
@@ -53,7 +54,8 @@ async def _preload():
 
 def _load_cache() -> list:
     """Scan and parse all JSONL files + Hermes session DBs + Codex sessions.  Cached until next refresh."""
-    global _cache
+    global _cache, _cache_time
+    import time
     records = []
     # Claude Code
     for f in scan_claude_jsonls():
@@ -64,12 +66,14 @@ def _load_cache() -> list:
     for f in scan_codex_jsonls():
         records.extend(parse_codex_jsonl(f))
     _cache = records
+    _cache_time = time.time()
     return _cache
 
 
 def _get_records(force: bool = False) -> list:
-    global _cache
-    if force or not _cache:
+    global _cache, _cache_time
+    import time
+    if force or not _cache or (time.time() - _cache_time) > CACHE_TTL:
         _load_cache()
     return _cache
 
@@ -77,6 +81,32 @@ def _get_records(force: bool = False) -> list:
 @app.get("/")
 def index():
     return FileResponse(str(STATIC / "index.html"))
+
+
+@app.get("/api/sources")
+def api_sources():
+    """Return list of available data sources found in parsed records.
+
+    Each source has a raw key (e.g. ``\"claude\"``) and a display label
+    (e.g. ``\"Claude Code\"``).  Labels are auto-generated from the raw
+    key when no explicit mapping exists.
+    """
+    records = _get_records()
+    sources = sorted({r.data_source for r in records if r.data_source})
+
+    # Friendly labels — extend this mapping for new parsers
+    LABELS: dict[str, str] = {
+        "claude": "Claude Code",
+        "hermes": "Hermes",
+        "codex": "Codex",
+    }
+
+    return {
+        "sources": [
+            {"key": s, "label": LABELS.get(s, s.title())}
+            for s in sources
+        ]
+    }
 
 
 @app.get("/api/profiles")
@@ -122,12 +152,14 @@ def api_models(source: str = Query(""), profile: str = Query("")):
 
 
 @app.get("/api/stats")
-def api_stats(time: str = Query("all"), model: str = Query(""), source: str = Query(""), profile: str = Query("")):
+def api_stats(time: str = Query("all"), model: str = Query(""), source: str = Query(""), profile: str = Query(""), agent: str = Query("")):
     records = _get_records()
     if source:
         records = [r for r in records if r.data_source == source]
     if profile:
         records = [r for r in records if r.profile == profile]
+    if agent:
+        records = [r for r in records if (r.agent or "unknown") == agent]
     stats = aggregate_by_model_date(records, time)
 
     if model:
@@ -151,12 +183,14 @@ def api_stats(time: str = Query("all"), model: str = Query(""), source: str = Qu
 
 
 @app.get("/api/summary")
-def api_summary(time: str = Query("all"), model: str = Query(""), source: str = Query(""), profile: str = Query("")):
+def api_summary(time: str = Query("all"), model: str = Query(""), source: str = Query(""), profile: str = Query(""), agent: str = Query("")):
     records = _get_records()
     if source:
         records = [r for r in records if r.data_source == source]
     if profile:
         records = [r for r in records if r.profile == profile]
+    if agent:
+        records = [r for r in records if (r.agent or "unknown") == agent]
     stats = aggregate_by_model_date(records, time)
     if model:
         stats = [s for s in stats if s.model == model]
@@ -222,7 +256,7 @@ def _compute_by_source_summary(records: list, time: str) -> list[dict]:
 
 @app.get("/api/logs")
 def api_logs(time: str = Query("all"), model: str = Query(""),
-             source: str = Query(""), profile: str = Query(""),
+             source: str = Query(""), profile: str = Query(""), agent: str = Query(""),
              page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=500)):
     """Return paginated raw TokenUsage records with timestamps."""
     records = _get_records()
@@ -230,6 +264,8 @@ def api_logs(time: str = Query("all"), model: str = Query(""),
         records = [r for r in records if r.data_source == source]
     if profile:
         records = [r for r in records if r.profile == profile]
+    if agent:
+        records = [r for r in records if (r.agent or "unknown") == agent]
     cutoff = get_time_cutoff(time)
 
     filtered = [r for r in records if r.timestamp >= cutoff]
@@ -267,7 +303,7 @@ def api_logs(time: str = Query("all"), model: str = Query(""),
 
 
 @app.get("/api/trends")
-def api_trends(time: str = Query("30d"), source: str = Query(""), profile: str = Query(""), model: str = Query("")):
+def api_trends(time: str = Query("30d"), source: str = Query(""), profile: str = Query(""), model: str = Query(""), agent: str = Query("")):
     """Return daily aggregated data for charts: [{date, requests, input, output, cache_read, cost}]."""
     records = _get_records()
     if source:
@@ -276,6 +312,8 @@ def api_trends(time: str = Query("30d"), source: str = Query(""), profile: str =
         records = [r for r in records if r.profile == profile]
     if model:
         records = [r for r in records if r.model == model]
+    if agent:
+        records = [r for r in records if (r.agent or "unknown") == agent]
     stats = aggregate_by_model_date(records, time)
 
     daily: dict[str, dict] = {}
@@ -296,7 +334,7 @@ def api_trends(time: str = Query("30d"), source: str = Query(""), profile: str =
 
 
 @app.get("/api/providers")
-def api_providers(time: str = Query("all"), model: str = Query(""), source: str = Query(""), profile: str = Query("")):
+def api_providers(time: str = Query("all"), model: str = Query(""), source: str = Query(""), profile: str = Query(""), agent: str = Query("")):
     """Return per-provider aggregated stats.
 
     Provider is extracted from each record's model field via
@@ -307,6 +345,8 @@ def api_providers(time: str = Query("all"), model: str = Query(""), source: str 
         records = [r for r in records if r.data_source == source]
     if profile:
         records = [r for r in records if r.profile == profile]
+    if agent:
+        records = [r for r in records if (r.agent or "unknown") == agent]
     cutoff = get_time_cutoff(time)
 
     filtered = [r for r in records if r.timestamp >= cutoff]

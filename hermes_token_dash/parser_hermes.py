@@ -59,6 +59,11 @@ def parse_hermes_sessions() -> list[TokenUsage]:
             profile = db_path.parent.name
 
         try:
+            # Use writable connection for WAL checkpoint
+            conn = sqlite3.connect(str(db_path), timeout=5)
+            conn.execute("PRAGMA wal_checkpoint(PASSIVE)")
+            conn.close()
+
             conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
@@ -85,7 +90,12 @@ def parse_hermes_sessions() -> list[TokenUsage]:
                 try:
                     ts = datetime.fromtimestamp(ts_val, tz=timezone.utc)
                 except (TypeError, ValueError, OSError):
-                    ts = datetime.now(timezone.utc)
+                    # For active sessions with future/invalid timestamps, use started_at
+                    ts_val = row["started_at"]
+                    try:
+                        ts = datetime.fromtimestamp(ts_val, tz=timezone.utc)
+                    except (TypeError, ValueError, OSError):
+                        ts = datetime.now(timezone.utc)
 
                 records.append(
                     TokenUsage(

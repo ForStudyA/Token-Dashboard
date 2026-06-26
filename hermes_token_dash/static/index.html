@@ -98,10 +98,11 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,san
 <div class="badge"><b>{{ timeLabel }}</b> · <b>{{ summary.requests }}</b> 次请求 · <b>¥{{ summary.cost }}</b></div></div>
 
 <div class="toolbar">
-<select v-model="timeFilter" @change="refreshAll"><option value="all">全部</option><option value="today">今天</option><option value="7d">最近7天</option><option value="30d">最近30天</option></select>
-<select v-model="sourceFilter" @change="refreshAll"><option value="">全部工具</option><option value="claude">Claude Code</option><option value="hermes">Hermes</option><option value="codex">Codex</option></select>
-<select v-model="profileFilter" @change="refreshAll"><option value="">全部Profile</option><option v-for="p in profiles" :value="p">{{p}}</option></select>
-<select v-model="activeModel" @change="refreshAll"><option value="">全部模型</option><option v-for="m in models" :value="m.name">{{m.name}}</option></select>
+<select v-model="timeFilter" @change="refreshView"><option value="all">全部</option><option value="today">今天</option><option value="7d">最近7天</option><option value="30d">最近30天</option></select>
+<select v-model="sourceFilter" @change="refreshView"><option value="">全部工具</option><option v-for="s in sources" :value="s.key">{{s.label}}</option></select>
+<select v-model="profileFilter" @change="refreshView"><option value="">全部Profile</option><option v-for="p in profiles" :value="p">{{p}}</option></select>
+<select v-model="agentFilter" @change="refreshView"><option value="">全部Agent</option><option v-for="a in agents" :value="a.name">{{a.name}}</option></select>
+<select v-model="activeModel" @change="refreshView"><option value="">全部模型</option><option v-for="m in models" :value="m.name">{{m.name}}</option></select>
 <select v-model="refreshMs"><option value="0">手动</option><option value="5000">5s</option><option value="10000">10s</option><option value="30000">30s</option></select>
 <select v-model="timezoneFilter"><option value="Asia/Shanghai">上海</option><option value="Asia/Tokyo">东京</option><option value="America/New_York">纽约</option><option value="Europe/London">伦敦</option><option value="UTC">UTC</option></select>
 <button class="btn" @click="refreshAll">↻ 刷新</button>
@@ -111,8 +112,8 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,san
 <div class="body">
 <div class="sidebar">
 <div class="slabel">模型</div>
-<div class="mitem" :class="{active:activeModel===''}" @click="activeModel='';refreshAll()"><span>全部</span><span class="cnt">{{modelsTotal}}</span></div>
-<div class="mitem" v-for="m in models" :class="{active:activeModel===m.name}" @click="activeModel=m.name;refreshAll()"><span class="trunc">{{m.name}}</span><span class="cnt">{{m.count}}</span></div>
+<div class="mitem" :class="{active:activeModel===''}" @click="activeModel='';refreshView()"><span>全部</span><span class="cnt">{{modelsTotal}}</span></div>
+<div class="mitem" v-for="m in models" :class="{active:activeModel===m.name}" @click="activeModel=m.name;refreshView()"><span class="trunc">{{m.name}}</span><span class="cnt">{{m.count}}</span></div>
 
 <div class="scard"><div class="slabel">汇总</div>
 <div class="srow"><span class="l">输入</span><span class="v">{{fmt(summary.input)}}</span></div>
@@ -171,7 +172,7 @@ const tc=ref(null),cc=ref(null);let ti=null,ci=null,timer=null
 const tab=ref('stats'),sf=ref('date'),sd=ref(1)
 const logItems=ref([]),logTotal=ref(0),logPage=ref(1),logLimit=20,logLoading=ref(false)
 const pstats=ref([])
-const profiles=ref([]),profileFilter=ref('')
+const profiles=ref([]),profileFilter=ref(''),sources=ref([]),agents=ref([]),agentFilter=ref('')
 
 const timeLabel=computed(()=>({all:'全部',today:'今天','7d':'最近7天','30d':'最近30天'}[timeFilter.value]))
 const totalCR=computed(()=>stats.value.reduce((s,r)=>s+(r.cache_read||0),0))
@@ -186,12 +187,14 @@ function toggleSort(f){if(sf.value===f)sd.value*=-1;else{sf.value=f;sd.value=1}}
 const q=(p={})=>{let s=new URLSearchParams();Object.entries(p).forEach(([k,v])=>{if(v)s.set(k,v)});return'?'+s.toString()}
 
 async function fetchProfiles(){try{const r=await fetch('/api/profiles');const d=await r.json();profiles.value=d.profiles||[]}catch(e){}}
+async function fetchSources(){try{const r=await fetch('/api/sources');const d=await r.json();sources.value=d.sources||[]}catch(e){}}
+async function fetchAgents(){try{const r=await fetch('/api/agents'+q({source:sourceFilter.value,profile:profileFilter.value}));const d=await r.json();agents.value=d.agents||[]}catch(e){}}
 
 async function fetchModels(){try{const r=await fetch('/api/models'+q({source:sourceFilter.value,profile:profileFilter.value}));const d=await r.json();models.value=d.models;modelsTotal.value=d.total}catch(e){}}
-async function fetchStats(){try{const p={time:timeFilter.value};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;if(profileFilter.value)p.profile=profileFilter.value;const[st,sm]=await Promise.all([fetch('/api/stats'+q(p)).then(r=>r.json()),fetch('/api/summary'+q(p)).then(r=>r.json())]);stats.value=st;summary.value=sm}catch(e){}}
-async function fetchLogs(){logLoading.value=true;try{const p={time:timeFilter.value,page:logPage.value,limit:logLimit};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;if(profileFilter.value)p.profile=profileFilter.value;const r=await fetch('/api/logs'+q(p));const d=await r.json();logItems.value=d.items||[];logTotal.value=d.total||0}catch(e){}finally{logLoading.value=false}}
-async function fetchProviders(){try{const p={time:timeFilter.value};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;if(profileFilter.value)p.profile=profileFilter.value;const r=await fetch('/api/providers'+q(p));const d=await r.json();pstats.value=Array.isArray(d)?d:[]}catch(e){}}
-async function fetchTrends(){try{const p={time:timeFilter.value};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;if(profileFilter.value)p.profile=profileFilter.value;return await(await fetch('/api/trends'+q(p))).json()}catch(e){return[]}}
+async function fetchStats(){try{const p={time:timeFilter.value};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;if(profileFilter.value)p.profile=profileFilter.value;if(agentFilter.value)p.agent=agentFilter.value;const[st,sm]=await Promise.all([fetch('/api/stats'+q(p)).then(r=>r.json()),fetch('/api/summary'+q(p)).then(r=>r.json())]);stats.value=st;summary.value=sm}catch(e){}}
+async function fetchLogs(){logLoading.value=true;try{const p={time:timeFilter.value,page:logPage.value,limit:logLimit};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;if(profileFilter.value)p.profile=profileFilter.value;if(agentFilter.value)p.agent=agentFilter.value;const r=await fetch('/api/logs'+q(p));const d=await r.json();logItems.value=d.items||[];logTotal.value=d.total||0}catch(e){}finally{logLoading.value=false}}
+async function fetchProviders(){try{const p={time:timeFilter.value};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;if(profileFilter.value)p.profile=profileFilter.value;if(agentFilter.value)p.agent=agentFilter.value;const r=await fetch('/api/providers'+q(p));const d=await r.json();pstats.value=Array.isArray(d)?d:[]}catch(e){}}
+async function fetchTrends(){try{const p={time:timeFilter.value};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;if(profileFilter.value)p.profile=profileFilter.value;if(agentFilter.value)p.agent=agentFilter.value;return await(await fetch('/api/trends'+q(p))).json()}catch(e){return[]}}
 
 function buildCharts(data){
 if(ti){ti.destroy();ti=null}
@@ -209,13 +212,14 @@ ci=new Chart(cc.value,{type:'bar',data:{labels,datasets:[
 }
 
 async function refreshCharts(){const d=await fetchTrends();await nextTick();buildCharts(d)}
-async function refreshAll(){await fetch('/api/refresh',{method:'POST'});await Promise.all([fetchProfiles(),fetchModels(),fetchStats(),fetchLogs()]);if(tab.value==='providers')await fetchProviders();await refreshCharts();lastRefresh.value=new Date().toLocaleTimeString('zh-CN',{timeZone:timezoneFilter.value,hour:'2-digit',minute:'2-digit',second:'2-digit'})}
+async function refreshView(){await Promise.all([fetchSources(),fetchAgents(),fetchProfiles(),fetchModels(),fetchStats(),fetchLogs()]);if(tab.value==='providers')await fetchProviders();await refreshCharts();lastRefresh.value=new Date().toLocaleTimeString('zh-CN',{timeZone:timezoneFilter.value,hour:'2-digit',minute:'2-digit',second:'2-digit'})}
+async function refreshAll(){await fetch('/api/refresh',{method:'POST'});await refreshView()}
 function onTab(t){tab.value=t;if(t==='providers')fetchProviders();if(t==='logs')fetchLogs()}
 
 onMounted(async()=>{await refreshAll();if(refreshMs.value>0)timer=setInterval(refreshAll,refreshMs.value)})
 watch(refreshMs,(val)=>{if(timer){clearInterval(timer);timer=null}if(val>0)timer=setInterval(refreshAll,val)})
 onUnmounted(()=>{if(timer)clearInterval(timer)})
 
-return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,profileFilter,profiles,activeModel,refreshMs,timezoneFilter,lastRefresh,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,timeLabel,totalCR,totalCC,sorted,fmt,hitColor,stime,toggleSort,refreshAll,onTab,fetchLogs}
+return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,profileFilter,profiles,activeModel,refreshMs,timezoneFilter,lastRefresh,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,sources,agents,agentFilter,timeLabel,totalCR,totalCC,sorted,fmt,hitColor,stime,toggleSort,refreshAll,refreshView,onTab,fetchLogs}
 }}).mount('#app')
 </script></body></html>
