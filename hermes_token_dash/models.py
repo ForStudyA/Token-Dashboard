@@ -26,24 +26,33 @@ class ModelPricing:
 
 
 # Pricing per 1M tokens (input, output, cache_read, cache_write) in USD
+# Sources: official API pages, pricepertoken.com, aipricing.guru (June 2026)
 MODEL_PRICING: dict[str, ModelPricing] = {
-    "deepseek-v4-pro": ModelPricing(0.55, 0.19),
-    "deepseek-v4-flash": ModelPricing(0.09, 0.36),
-    "mimo-v2.5": ModelPricing(0.50, 2.00),
-    "mimo-v2.5-pro": ModelPricing(0.50, 2.00),
+    # DeepSeek (official, permanent 75% discount effective April 2026)
+    "deepseek-v4-pro": ModelPricing(0.435, 0.87),
+    "deepseek-v4-flash": ModelPricing(0.07, 0.28),
+    # MiMo / Xiaomi (overseas pricing, official page)
+    "mimo-v2.5": ModelPricing(0.14, 0.28),
+    "mimo-v2.5-pro": ModelPricing(0.435, 0.87),
+    # Claude / Anthropic
     "claude-sonnet-4-6": ModelPricing(3.00, 15.00),
     "claude-opus-4-8": ModelPricing(15.00, 75.00),
-    # Qwen / Alibaba Cloud (USD per 1M tokens)
+    # Qwen / Alibaba Cloud
     "qwen-max": ModelPricing(1.60, 6.40),
     "qwen-plus": ModelPricing(0.40, 1.20),
     "qwen-turbo": ModelPricing(0.05, 0.20),
     "qwen3-235b-a22b": ModelPricing(0.50, 2.00),
-    # Codex / OpenAI models (USD per 1M tokens)
-    "gpt-5.4-mini": ModelPricing(0.50, 2.00),
-    "gpt-5.5": ModelPricing(2.00, 8.00),
+    # OpenAI / GPT
+    "gpt-5.5": ModelPricing(5.00, 30.00),
+    "gpt-5.4-mini": ModelPricing(0.75, 4.50),
     "gpt-5.3-codex": ModelPricing(2.00, 8.00),
     "codex-auto-review": ModelPricing(0.00, 0.00),
+    # GLM / Zhipu
+    "glm-5.2": ModelPricing(0.50, 2.00),
 }
+
+# Exchange rate: USD → display currency (default CNY)
+EXCHANGE_RATE: float = 7.25
 
 DEFAULT_INPUT_PRICE = 0.50
 DEFAULT_OUTPUT_PRICE = 2.00

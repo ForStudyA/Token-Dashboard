@@ -542,6 +542,26 @@ def api_refresh():
     return {"ok": True}
 
 
+@app.get("/api/settings")
+def api_get_settings():
+    """Return current settings: exchange rate."""
+    from hermes_token_dash.models import EXCHANGE_RATE
+    return {"exchange_rate": EXCHANGE_RATE}
+
+
+class SettingsUpdate(BaseModel):
+    exchange_rate: float | None = None
+
+
+@app.put("/api/settings")
+def api_update_settings(body: SettingsUpdate):
+    """Update runtime settings."""
+    from hermes_token_dash import models
+    if body.exchange_rate is not None and body.exchange_rate > 0:
+        models.EXCHANGE_RATE = body.exchange_rate
+    return {"ok": True, "exchange_rate": models.EXCHANGE_RATE}
+
+
 def main():
     import uvicorn
     webbrowser.open("http://127.0.0.1:8765")

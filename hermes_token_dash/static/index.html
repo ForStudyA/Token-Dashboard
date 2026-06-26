@@ -104,9 +104,20 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,san
 <select v-model="agentFilter" @change="refreshView"><option value="">全部Agent</option><option v-for="a in agents" :value="a.name">{{a.name}}</option></select>
 <select v-model="activeModel" @change="refreshView"><option value="">全部模型</option><option v-for="m in models" :value="m.name">{{m.name}}</option></select>
 <select v-model="refreshMs"><option value="0">手动</option><option value="5000">5s</option><option value="10000">10s</option><option value="30000">30s</option></select>
-<select v-model="timezoneFilter"><option value="Asia/Shanghai">上海</option><option value="Asia/Tokyo">东京</option><option value="America/New_York">纽约</option><option value="Europe/London">伦敦</option><option value="UTC">UTC</option></select>
+<button class="btn" @click="showSettings=!showSettings">⚙</button>
 <button class="btn" @click="refreshAll">↻ 刷新</button>
 <span style="margin-left:auto;font-size:11px;color:var(--muted)">{{lastRefresh}}</span>
+</div>
+
+<div class="settings-panel" v-show="showSettings" style="background:var(--surface);border-bottom:1px solid var(--border);padding:12px 16px;display:flex;gap:16px;align-items:center;flex-shrink:0">
+<span style="font-size:13px;color:var(--muted)">设置</span>
+<label style="font-size:12px;color:var(--text)">汇率 USD→CNY</label>
+<input v-model.number="exchangeRate" @change="saveSettings" type="number" step="0.01" min="1" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;width:80px;font-size:12px">
+<label style="font-size:12px;color:var(--text)">时区</label>
+<select v-model="timezoneFilter" style="background:var(--card);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:12px">
+<option value="Asia/Shanghai">上海</option><option value="Asia/Tokyo">东京</option>
+<option value="America/New_York">纽约</option><option value="Europe/London">伦敦</option><option value="UTC">UTC</option>
+</select>
 </div>
 
 <div class="body">
@@ -173,7 +184,7 @@ const tc=ref(null),cc=ref(null);let ti=null,ci=null,timer=null
 const tab=ref('stats'),sf=ref('date'),sd=ref(1)
 const logItems=ref([]),logTotal=ref(0),logPage=ref(1),logLimit=20,logLoading=ref(false)
 const pstats=ref([])
-const profiles=ref([]),profileFilter=ref(''),sources=ref([]),agents=ref([]),agentFilter=ref('')
+const profiles=ref([]),profileFilter=ref(''),sources=ref([]),agents=ref([]),agentFilter=ref(''),showSettings=ref(false),exchangeRate=ref(7.25)
 
 const timeLabel=computed(()=>({all:'全部',today:'今天','7d':'最近7天','30d':'最近30天'}[timeFilter.value]))
 const merged=computed(()=>{const m={};for(const s of stats.value){const k=s.model;if(!m[k])m[k]={model:k,input:0,output:0,cache_read:0,cache_create:0,requests:0,requests_cache:0,cost:0};m[k].input+=s.input;m[k].output+=s.output;m[k].cache_read+=s.cache_read;m[k].cache_create+=s.cache_create;m[k].requests+=s.requests;m[k].requests_cache+=s.requests_cache;m[k].cost+=s.cost}for(const k in m){m[k].hit_rate=m[k].requests?Math.round(m[k].requests_cache/m[k].requests*1000)/10:0}return Object.values(m)})
@@ -190,6 +201,8 @@ const q=(p={})=>{let s=new URLSearchParams();Object.entries(p).forEach(([k,v])=>
 async function fetchProfiles(){try{const r=await fetch('/api/profiles');const d=await r.json();profiles.value=d.profiles||[]}catch(e){}}
 async function fetchSources(){try{const r=await fetch('/api/sources');const d=await r.json();sources.value=d.sources||[]}catch(e){}}
 async function fetchAgents(){try{const r=await fetch('/api/agents'+q({source:sourceFilter.value,profile:profileFilter.value}));const d=await r.json();agents.value=d.agents||[]}catch(e){}}
+async function fetchSettings(){try{const r=await fetch('/api/settings');const d=await r.json();exchangeRate.value=d.exchange_rate||7.25}catch(e){}}
+async function saveSettings(){await fetch('/api/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({exchange_rate:exchangeRate.value})});refreshAll()}
 
 async function fetchModels(){try{const r=await fetch('/api/models'+q({source:sourceFilter.value,profile:profileFilter.value}));const d=await r.json();models.value=d.models;modelsTotal.value=d.total}catch(e){}}
 async function fetchStats(){try{const p={time:timeFilter.value};if(activeModel.value)p.model=activeModel.value;if(sourceFilter.value)p.source=sourceFilter.value;if(profileFilter.value)p.profile=profileFilter.value;if(agentFilter.value)p.agent=agentFilter.value;const[st,sm]=await Promise.all([fetch('/api/stats'+q(p)).then(r=>r.json()),fetch('/api/summary'+q(p)).then(r=>r.json())]);stats.value=st;summary.value=sm}catch(e){}}
@@ -217,10 +230,10 @@ async function refreshView(){await Promise.all([fetchSources(),fetchAgents(),fet
 async function refreshAll(){await fetch('/api/refresh',{method:'POST'});await refreshView()}
 function onTab(t){tab.value=t;if(t==='providers')fetchProviders();if(t==='logs')fetchLogs()}
 
-onMounted(async()=>{await refreshAll();if(refreshMs.value>0)timer=setInterval(refreshAll,refreshMs.value)})
+onMounted(async()=>{await fetchSettings();await refreshAll();if(refreshMs.value>0)timer=setInterval(refreshAll,refreshMs.value)})
 watch(refreshMs,(val)=>{if(timer){clearInterval(timer);timer=null}if(val>0)timer=setInterval(refreshAll,val)})
 onUnmounted(()=>{if(timer)clearInterval(timer)})
 
-return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,profileFilter,profiles,activeModel,refreshMs,timezoneFilter,lastRefresh,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,sources,agents,agentFilter,timeLabel,sorted,fmt,hitColor,stime,pricePerM,toggleSort,refreshAll,refreshView,onTab,fetchLogs}
+return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,profileFilter,profiles,activeModel,refreshMs,timezoneFilter,lastRefresh,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,sources,agents,agentFilter,timeLabel,sorted,fmt,hitColor,stime,pricePerM,toggleSort,refreshAll,refreshView,onTab,fetchLogs,showSettings,exchangeRate,saveSettings}
 }}).mount('#app')
 </script></body></html>
