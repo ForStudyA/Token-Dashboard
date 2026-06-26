@@ -139,9 +139,9 @@ body{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,san
 </div>
 
 <div class="twrap" v-show="tab==='stats'">
-<div class="thdr"><span @click="toggleSort('model')" style="width:200px">模型</span><span @click="toggleSort('input')" style="width:100px">输入</span><span @click="toggleSort('output')" style="width:100px">输出</span><span @click="toggleSort('requests')" style="width:70px">请求</span><span style="width:140px">命中率</span><span @click="toggleSort('cost')" style="width:80px">费用</span></div>
+<div class="thdr"><span @click="toggleSort('model')" style="width:200px">模型</span><span @click="toggleSort('input')" style="width:100px">输入</span><span @click="toggleSort('output')" style="width:100px">输出</span><span @click="toggleSort('requests')" style="width:70px">请求</span><span style="width:140px">命中率</span><span @click="toggleSort('cost')" style="width:80px">费用</span><span @click="toggleSort('price')" style="width:90px">单价/1M</span></div>
 <template v-if="sorted.length">
-<div class="row" v-for="s in sorted" :key="s.model+s.date"><span class="trunc" style="width:200px">{{s.model}}</span><span style="width:100px">{{fmt(s.input)}}</span><span style="width:100px">{{fmt(s.output)}}</span><span style="width:70px">{{s.requests}}</span><span style="width:140px"><div class="pwrap"><div class="pbar"><div class="pfill" :class="hitColor(s.hit_rate)" :style="{width:s.hit_rate+'%'}"></div></div><span class="ppct" :class="hitColor(s.hit_rate)">{{s.hit_rate}}%</span></div></span><span style="width:80px">¥{{s.cost.toFixed(4)}}</span></div>
+<div class="row" v-for="s in sorted" :key="s.model+s.date"><span class="trunc" style="width:200px">{{s.model}}</span><span style="width:100px">{{fmt(s.input)}}</span><span style="width:100px">{{fmt(s.output)}}</span><span style="width:70px">{{s.requests}}</span><span style="width:140px"><div class="pwrap"><div class="pbar"><div class="pfill" :class="hitColor(s.hit_rate)" :style="{width:s.hit_rate+'%'}"></div></div><span class="ppct" :class="hitColor(s.hit_rate)">{{s.hit_rate}}%</span></div></span><span style="width:80px">¥{{s.cost.toFixed(4)}}</span><span style="width:90px">{{pricePerM(s)}}</span></div>
 </template><div class="empty" v-else>暂无数据</div>
 </div>
 
@@ -179,6 +179,7 @@ const sorted=computed(()=>{let a=[...stats.value];a.sort((x,y)=>{let vx=x[sf.val
 
 function fmt(n){if(n==null)return'0';if(n>=1e9)return(n/1e9).toFixed(2)+'B';if(n>=1e6)return(n/1e6).toFixed(1)+'M';if(n>=1e3)return(n/1e3).toFixed(0)+'K';return String(n)}
 function hitColor(v){if(v===0)return'';return v>=80?'g':v>=40?'y':'r'}
+function pricePerM(s){const total=s.input+s.output;if(!total)return'¥0';return'¥'+(s.cost*1e6/total).toFixed(2)}
 function stime(iso,tz){if(!iso)return'';const d=new Date(iso);if(isNaN(d.getTime()))return'';const opts={timeZone:tz||'Asia/Shanghai',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'};return d.toLocaleString([],opts)}
 function toggleSort(f){if(sf.value===f)sd.value*=-1;else{sf.value=f;sd.value=1}}
 
@@ -218,6 +219,6 @@ onMounted(async()=>{await refreshAll();if(refreshMs.value>0)timer=setInterval(re
 watch(refreshMs,(val)=>{if(timer){clearInterval(timer);timer=null}if(val>0)timer=setInterval(refreshAll,val)})
 onUnmounted(()=>{if(timer)clearInterval(timer)})
 
-return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,profileFilter,profiles,activeModel,refreshMs,timezoneFilter,lastRefresh,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,sources,agents,agentFilter,timeLabel,sorted,fmt,hitColor,stime,toggleSort,refreshAll,refreshView,onTab,fetchLogs}
+return{stats,summary,models,modelsTotal,timeFilter,sourceFilter,profileFilter,profiles,activeModel,refreshMs,timezoneFilter,lastRefresh,tc,cc,tab,sf,sd,logItems,logTotal,logPage,logLimit,logLoading,pstats,sources,agents,agentFilter,timeLabel,sorted,fmt,hitColor,stime,pricePerM,toggleSort,refreshAll,refreshView,onTab,fetchLogs}
 }}).mount('#app')
 </script></body></html>
