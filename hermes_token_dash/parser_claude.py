@@ -78,7 +78,7 @@ def parse_jsonl(filepath: Path) -> list[TokenUsage]:
                 if msg_id in seen:
                     # Streaming duplicate: keep highest token counts, earliest ts
                     existing = seen[msg_id]
-                    existing.input_tokens = max(existing.input_tokens, input_tokens)
+                    existing.input_tokens = max(existing.input_tokens, input_tokens + cache_read)
                     existing.output_tokens = max(existing.output_tokens, output_tokens)
                     existing.cache_read = max(existing.cache_read, cache_read)
                     existing.cache_creation = max(
@@ -88,7 +88,7 @@ def parse_jsonl(filepath: Path) -> list[TokenUsage]:
                     seen[msg_id] = TokenUsage(
                         request_id=msg_id,
                         model=model,
-                        input_tokens=input_tokens,
+                        input_tokens=input_tokens + cache_read,
                         output_tokens=output_tokens,
                         cache_read=cache_read,
                         cache_creation=cache_creation,
