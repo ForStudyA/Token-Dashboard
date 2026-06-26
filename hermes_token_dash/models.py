@@ -8,10 +8,16 @@ from datetime import datetime
 
 @dataclass
 class ModelPricing:
-    """Pricing for a single model (per 1M tokens, USD)."""
+    """Pricing for a single model (per 1M tokens).
+
+    Prices are stored in the model's native billing currency.
+    ``currency`` is ``"USD"`` or ``"CNY"``.  USD prices are converted
+    to CNY for display via ``EXCHANGE_RATE``; CNY prices are used as-is.
+    """
 
     input_price: float
     output_price: float
+    currency: str = "USD"
     cache_read_price: float = 0.0
     cache_write_price: float = 0.0
 
@@ -20,38 +26,46 @@ class ModelPricing:
             "model": model_name,
             "input_price": self.input_price,
             "output_price": self.output_price,
+            "currency": self.currency,
             "cache_read_price": self.cache_read_price,
             "cache_write_price": self.cache_write_price,
         }
 
+    def display_prices(self) -> tuple[float, float]:
+        """Return (input, output) prices in display currency (CNY)."""
+        if self.currency == "CNY":
+            return (self.input_price, self.output_price)
+        return (self.input_price * EXCHANGE_RATE, self.output_price * EXCHANGE_RATE)
 
-# Pricing per 1M tokens (input, output, cache_read, cache_write) in USD
-# Sources: official API pages, pricepertoken.com, aipricing.guru (June 2026)
+
+# Pricing per 1M tokens in native billing currency
+# CNY models: domestic API pricing, no exchange rate applied
+# USD models: overseas/international pricing, converted via EXCHANGE_RATE
 MODEL_PRICING: dict[str, ModelPricing] = {
-    # DeepSeek (official, permanent 75% discount effective April 2026)
-    "deepseek-v4-pro": ModelPricing(0.435, 0.87),
-    "deepseek-v4-flash": ModelPricing(0.07, 0.28),
-    # MiMo / Xiaomi (overseas pricing, official page)
-    "mimo-v2.5": ModelPricing(0.14, 0.28),
-    "mimo-v2.5-pro": ModelPricing(0.435, 0.87),
-    # Claude / Anthropic
-    "claude-sonnet-4-6": ModelPricing(3.00, 15.00),
-    "claude-opus-4-8": ModelPricing(15.00, 75.00),
-    # Qwen / Alibaba Cloud
-    "qwen-max": ModelPricing(1.60, 6.40),
-    "qwen-plus": ModelPricing(0.40, 1.20),
-    "qwen-turbo": ModelPricing(0.05, 0.20),
-    "qwen3-235b-a22b": ModelPricing(0.50, 2.00),
-    # OpenAI / GPT
-    "gpt-5.5": ModelPricing(5.00, 30.00),
-    "gpt-5.4-mini": ModelPricing(0.75, 4.50),
-    "gpt-5.3-codex": ModelPricing(2.00, 8.00),
-    "codex-auto-review": ModelPricing(0.00, 0.00),
-    # GLM / Zhipu
-    "glm-5.2": ModelPricing(0.50, 2.00),
+    # DeepSeek (domestic CNY pricing)
+    "deepseek-v4-pro": ModelPricing(2.00, 4.00, "CNY"),
+    "deepseek-v4-flash": ModelPricing(0.50, 2.00, "CNY"),
+    # MiMo / Xiaomi (domestic CNY pricing, official page)
+    "mimo-v2.5": ModelPricing(0.02, 1.00, "CNY"),
+    "mimo-v2.5-pro": ModelPricing(2.00, 4.00, "CNY"),
+    # Qwen / Alibaba Cloud (domestic CNY pricing)
+    "qwen-max": ModelPricing(10.00, 40.00, "CNY"),
+    "qwen-plus": ModelPricing(2.00, 8.00, "CNY"),
+    "qwen-turbo": ModelPricing(0.50, 2.00, "CNY"),
+    "qwen3-235b-a22b": ModelPricing(2.00, 8.00, "CNY"),
+    # GLM / Zhipu (domestic CNY pricing)
+    "glm-5.2": ModelPricing(1.00, 4.00, "CNY"),
+    # Claude / Anthropic (USD)
+    "claude-sonnet-4-6": ModelPricing(3.00, 15.00, "USD"),
+    "claude-opus-4-8": ModelPricing(15.00, 75.00, "USD"),
+    # OpenAI / GPT (USD)
+    "gpt-5.5": ModelPricing(5.00, 30.00, "USD"),
+    "gpt-5.4-mini": ModelPricing(0.75, 4.50, "USD"),
+    "gpt-5.3-codex": ModelPricing(2.00, 8.00, "USD"),
+    "codex-auto-review": ModelPricing(0.00, 0.00, "USD"),
 }
 
-# Exchange rate: USD → display currency (default CNY)
+# Exchange rate: USD -> CNY (only applied to USD-priced models)
 EXCHANGE_RATE: float = 7.25
 
 DEFAULT_INPUT_PRICE = 0.50
@@ -59,15 +73,15 @@ DEFAULT_OUTPUT_PRICE = 2.00
 
 
 def get_model_price(model: str) -> tuple[float, float]:
-    """Return (input_price_per_1M, output_price_per_1M) for a model.
+    """Return (input_price, output_price) in CNY for *model*.
 
-    Uses fuzzy substring matching so that model name variants like
-    ``claude-sonnet-4-6-20250526`` still hit the right pricing entry.
+    Uses fuzzy substring matching.  USD models are converted via
+    ``EXCHANGE_RATE``; CNY models are returned as-is.
     """
     model_lower = model.lower()
-    for key, prices in MODEL_PRICING.items():
+    for key, pricing in MODEL_PRICING.items():
         if key in model_lower or model_lower in key:
-            return (prices.input_price, prices.output_price)
+            return pricing.display_prices()
     return (DEFAULT_INPUT_PRICE, DEFAULT_OUTPUT_PRICE)
 
 
@@ -90,10 +104,10 @@ def extract_provider(model: str) -> str:
     meaningful name.  Falls back to the raw model string.
 
     Examples:
-        ``"deepseek-v4-pro"``          → ``"deepseek"``
-        ``"claude-sonnet-4-6-20250526"`` → ``"claude"``
-        ``"mimo-v2.5"``                → ``"mimo"``
-        ``"unknown"``                  → ``"unknown"``
+        ``"deepseek-v4-pro"``             -> ``"deepseek"``
+        ``"claude-sonnet-4-6-20250526"``  -> ``"claude"``
+        ``"mimo-v2.5"``                   -> ``"mimo"``
+        ``"unknown"``                     -> ``"unknown"``
     """
     parts = model.split("-")
     if parts and parts[0].strip():
@@ -140,7 +154,8 @@ class ModelStats:
 
         Cache hit rate is defined as the percentage of total requests that
         had a cache read (cache_read_input_tokens > 0).
-        Cost is in display currency (CNY by default, via EXCHANGE_RATE).
+        Cost is in display currency (CNY).  USD models are converted
+        via EXCHANGE_RATE via get_model_price; CNY models use native pricing.
         """
         if self.request_count > 0:
             self.cache_hit_rate = (
@@ -150,4 +165,4 @@ class ModelStats:
         self.estimated_cost = (
             self.total_input / 1_000_000 * in_price
             + self.total_output / 1_000_000 * out_price
-        ) * EXCHANGE_RATE
+        )
