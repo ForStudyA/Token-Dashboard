@@ -50,6 +50,7 @@ MODEL_PRICING: dict[str, ModelPricing] = {
     # DeepSeek (official domestic CNY)
     "deepseek-v4-pro": ModelPricing(3.00, 6.00, "CNY", cache_read_price=0.025),
     "deepseek-v4-flash": ModelPricing(1.00, 2.00, "CNY", cache_read_price=0.02),
+    "deepseek-chat": ModelPricing(1.00, 2.00, "CNY", cache_read_price=0.02),  # 合并为 deepseek-v4-flash
     # MiMo / Xiaomi (priced same as DeepSeek equivalents)
     "mimo-v2.5": ModelPricing(1.00, 2.00, "CNY", cache_read_price=0.02),
     "mimo-v2.5-pro": ModelPricing(3.00, 6.00, "CNY", cache_read_price=0.025),
@@ -151,7 +152,8 @@ class ModelStats:
     total_cache_creation: int
     request_count: int
     requests_with_cache: int = 0
-    cache_hit_rate: float = 0.0
+    cache_hit_rate: float = 0.0       # request-level: requests_with_cache / request_count
+    token_hit_rate: float = 0.0       # token-level: total_cache_read / total_input
     estimated_cost: float = 0.0
 
     def compute_derived(self) -> None:
@@ -167,6 +169,10 @@ class ModelStats:
         if self.request_count > 0:
             self.cache_hit_rate = (
                 self.requests_with_cache / self.request_count * 100
+            )
+        if self.total_input > 0:
+            self.token_hit_rate = (
+                self.total_cache_read / self.total_input * 100
             )
         in_price, out_price, cr_price = get_model_price(self.model)
         non_cache_input = max(0, self.total_input - self.total_cache_read)

@@ -79,6 +79,37 @@ def _get_records(force: bool = False) -> list:
     return _cache
 
 
+def _apply_time_filter(records: list, time: str, start: str, end: str):
+    """Filter *records* by *time* preset or custom [*start*, *end*] ISO range.
+
+    When *time* is ``\"custom\"``, *start* and/or *end* (ISO-8601
+    datetime strings) are parsed as UTC and used as inclusive bounds.
+    Otherwise ``get_time_cutoff(time)`` is used as a lower bound.
+    """
+    from datetime import datetime, timezone as _tz
+    if time == "custom":
+        if start:
+            try:
+                s = datetime.fromisoformat(start)
+                if s.tzinfo is None:
+                    s = s.replace(tzinfo=_tz.utc)
+                records = [r for r in records if r.timestamp >= s]
+            except (ValueError, TypeError):
+                pass
+        if end:
+            try:
+                e = datetime.fromisoformat(end)
+                if e.tzinfo is None:
+                    e = e.replace(tzinfo=_tz.utc)
+                records = [r for r in records if r.timestamp <= e]
+            except (ValueError, TypeError):
+                pass
+        return records
+    # Preset filter: "all" | "today" | "7d" | "30d"
+    cutoff = get_time_cutoff(time)
+    return [r for r in records if r.timestamp >= cutoff]
+
+
 @app.get("/")
 def index():
     return FileResponse(str(STATIC / "index.html"))
@@ -122,12 +153,15 @@ def api_profiles():
 
 
 @app.get("/api/models")
-def api_models(source: str = Query(""), profile: str = Query("")):
+def api_models(source: str = Query(""), profile: str = Query(""), time: str = Query(""),
+               start: str = Query(""), end: str = Query("")):
     records = _get_records()
     if source:
         records = [r for r in records if r.data_source == source]
     if profile:
         records = [r for r in records if r.profile == profile]
+    if time:
+        records = _apply_time_filter(records, time, start, end)
     models = get_available_models(records)
     counts = {m: sum(1 for r in records if r.model == m) for m in models}
 
@@ -153,7 +187,8 @@ def api_models(source: str = Query(""), profile: str = Query("")):
 
 
 @app.get("/api/stats")
-def api_stats(time: str = Query("all"), model: str = Query(""), source: str = Query(""), profile: str = Query(""), agent: str = Query("")):
+def api_stats(time: str = Query("all"), model: str = Query(""), source: str = Query(""), profile: str = Query(""), agent: str = Query(""),
+              start: str = Query(""), end: str = Query("")):
     records = _get_records()
     if source:
         records = [r for r in records if r.data_source == source]
@@ -161,6 +196,9 @@ def api_stats(time: str = Query("all"), model: str = Query(""), source: str = Qu
         records = [r for r in records if r.profile == profile]
     if agent:
         records = [r for r in records if (r.agent or "unknown") == agent]
+    if time == "custom":
+        records = _apply_time_filter(records, "custom", start, end)
+        time = "all"
     stats = aggregate_by_model_date(records, time)
 
     if model:
@@ -178,13 +216,15 @@ def api_stats(time: str = Query("all"), model: str = Query(""), source: str = Qu
             "requests": s.request_count,
             "requests_cache": s.requests_with_cache,
             "hit_rate": round(s.cache_hit_rate, 1),
+            "token_hit_rate": round(s.token_hit_rate, 1),
             "cost": round(s.estimated_cost, 4),
         })
     return result
 
 
 @app.get("/api/summary")
-def api_summary(time: str = Query("all"), model: str = Query(""), source: str = Query(""), profile: str = Query(""), agent: str = Query("")):
+def api_summary(time: str = Query("all"), model: str = Query(""), source: str = Query(""), profile: str = Query(""), agent: str = Query(""),
+                start: str = Query(""), end: str = Query("")):
     records = _get_records()
     if source:
         records = [r for r in records if r.data_source == source]
@@ -192,6 +232,9 @@ def api_summary(time: str = Query("all"), model: str = Query(""), source: str = 
         records = [r for r in records if r.profile == profile]
     if agent:
         records = [r for r in records if (r.agent or "unknown") == agent]
+    if time == "custom":
+        records = _apply_time_filter(records, "custom", start, end)
+        time = "all"
     stats = aggregate_by_model_date(records, time)
     if model:
         stats = [s for s in stats if s.model == model]
@@ -204,6 +247,7 @@ def api_summary(time: str = Query("all"), model: str = Query(""), source: str = 
     tr = sum(s.request_count for s in stats)
     trc = sum(s.requests_with_cache for s in stats)
     hit = round(trc / tr * 100, 1) if tr > 0 else 0
+    token_hit = round(tcr / ti * 100, 1) if ti > 0 else 0
 
     return {
         "input": ti,
@@ -213,6 +257,7 @@ def api_summary(time: str = Query("all"), model: str = Query(""), source: str = 
         "cost": round(tc, 2),
         "requests": tr,
         "hit_rate": hit,
+        "token_hit_rate": token_hit,
         "groups": len(stats),
         "by_source": _compute_by_source_summary(records, time) if not source else [],
     }
@@ -221,8 +266,7 @@ def api_summary(time: str = Query("all"), model: str = Query(""), source: str = 
 def _compute_by_source_summary(records: list, time: str) -> list[dict]:
     """Compute per-source aggregated summary."""
     from collections import defaultdict
-    cutoff = get_time_cutoff(time)
-    filtered = [r for r in records if r.timestamp >= cutoff]
+    filtered = _apply_time_filter(records, time, "", "")
 
     src: dict[str, dict] = {}
     for r in filtered:
@@ -263,6 +307,7 @@ def _compute_by_source_summary(records: list, time: str) -> list[dict]:
 @app.get("/api/logs")
 def api_logs(time: str = Query("all"), model: str = Query(""),
              source: str = Query(""), profile: str = Query(""), agent: str = Query(""),
+             start: str = Query(""), end: str = Query(""),
              page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=500)):
     """Return paginated raw TokenUsage records with timestamps."""
     records = _get_records()
@@ -272,9 +317,8 @@ def api_logs(time: str = Query("all"), model: str = Query(""),
         records = [r for r in records if r.profile == profile]
     if agent:
         records = [r for r in records if (r.agent or "unknown") == agent]
-    cutoff = get_time_cutoff(time)
 
-    filtered = [r for r in records if r.timestamp >= cutoff]
+    filtered = _apply_time_filter(records, time, start, end)
     if model:
         filtered = [r for r in filtered if r.model == model]
 
@@ -310,7 +354,8 @@ def api_logs(time: str = Query("all"), model: str = Query(""),
 
 
 @app.get("/api/trends")
-def api_trends(time: str = Query("30d"), source: str = Query(""), profile: str = Query(""), model: str = Query(""), agent: str = Query("")):
+def api_trends(time: str = Query("30d"), source: str = Query(""), profile: str = Query(""), model: str = Query(""), agent: str = Query(""),
+               start: str = Query(""), end: str = Query("")):
     """Return daily aggregated data for charts: [{date, requests, input, output, cache_read, cost}]."""
     records = _get_records()
     if source:
@@ -321,6 +366,9 @@ def api_trends(time: str = Query("30d"), source: str = Query(""), profile: str =
         records = [r for r in records if r.model == model]
     if agent:
         records = [r for r in records if (r.agent or "unknown") == agent]
+    if time == "custom":
+        records = _apply_time_filter(records, "custom", start, end)
+        time = "all"
     stats = aggregate_by_model_date(records, time)
 
     daily: dict[str, dict] = {}
@@ -341,7 +389,8 @@ def api_trends(time: str = Query("30d"), source: str = Query(""), profile: str =
 
 
 @app.get("/api/providers")
-def api_providers(time: str = Query("all"), model: str = Query(""), source: str = Query(""), profile: str = Query(""), agent: str = Query("")):
+def api_providers(time: str = Query("all"), model: str = Query(""), source: str = Query(""), profile: str = Query(""), agent: str = Query(""),
+                  start: str = Query(""), end: str = Query("")):
     """Return per-provider aggregated stats.
 
     Provider is extracted from each record's model field via
@@ -354,9 +403,8 @@ def api_providers(time: str = Query("all"), model: str = Query(""), source: str 
         records = [r for r in records if r.profile == profile]
     if agent:
         records = [r for r in records if (r.agent or "unknown") == agent]
-    cutoff = get_time_cutoff(time)
 
-    filtered = [r for r in records if r.timestamp >= cutoff]
+    filtered = _apply_time_filter(records, time, start, end)
     if model:
         filtered = [r for r in filtered if r.model == model]
 
@@ -447,7 +495,8 @@ def api_agents(source: str = Query(""), profile: str = Query("")):
 @app.get("/api/agent-stats")
 def api_agent_stats(time: str = Query("all"), model: str = Query(""),
                     source: str = Query(""), profile: str = Query(""),
-                    agent: str = Query("")):
+                    agent: str = Query(""),
+                    start: str = Query(""), end: str = Query("")):
     """Agent × model cross statistics — one row per (agent, model) combination."""
     from collections import defaultdict
 
@@ -456,9 +505,8 @@ def api_agent_stats(time: str = Query("all"), model: str = Query(""),
         records = [r for r in records if r.data_source == source]
     if profile:
         records = [r for r in records if r.profile == profile]
-    cutoff = get_time_cutoff(time)
 
-    filtered = [r for r in records if r.timestamp >= cutoff]
+    filtered = _apply_time_filter(records, time, start, end)
     if model:
         filtered = [r for r in filtered if r.model == model]
     if agent:
@@ -566,6 +614,228 @@ def api_update_settings(body: SettingsUpdate):
     if body.exchange_rate is not None and body.exchange_rate > 0:
         models.EXCHANGE_RATE = body.exchange_rate
     return {"ok": True, "exchange_rate": models.EXCHANGE_RATE}
+
+
+@app.get("/api/balance/deepseek")
+def api_balance_deepseek():
+    """Query DeepSeek balance via official API."""
+    import os
+    import requests as _req
+    
+    api_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if not api_key:
+        # 回退：从 Windows 用户环境变量读取（MSYS 终端可能读不到）
+        try:
+            import winreg
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment") as key:
+                api_key, _ = winreg.QueryValueEx(key, "DEEPSEEK_API_KEY")
+        except Exception:
+            pass
+    if not api_key:
+        # 回退：从配置文件读取
+        key_file = Path(__file__).parent.parent / "deepseek_key.txt"
+        if key_file.exists():
+            api_key = key_file.read_text().strip()
+    
+    if not api_key:
+        return {"status": "no_key", "message": "未配置 API Key"}
+    
+    try:
+        resp = _req.get(
+            "https://api.deepseek.com/user/balance",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10
+        )
+        data = resp.json()
+        
+        if resp.status_code == 401:
+            return {"status": "invalid_key", "message": "API Key 无效"}
+        
+        if "balance_infos" in data and data["balance_infos"]:
+            info = data["balance_infos"][0]
+            return {
+                "status": "ok",
+                "balances": {
+                    "total": float(info.get("total_balance", 0)),
+                    "granted": float(info.get("granted_balance", 0)),
+                    "topped_up": float(info.get("topped_up_balance", 0)),
+                },
+                "currency": info.get("currency", "CNY"),
+                "is_available": data.get("is_available", True)
+            }
+        
+        return {"status": "error", "message": str(data)}
+        
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+@app.post("/api/balance/deepseek/key")
+def api_save_deepseek_key(key: str = ""):
+    """Save DeepSeek API key to file."""
+    key_file = Path(__file__).parent.parent / "deepseek_key.txt"
+    key_file.write_text(key.strip())
+    return {"ok": True}
+
+
+def _mimo_login_sync():
+    """Synchronous MiMo login - runs in thread pool."""
+    import json as _json
+    import os
+    import time
+    from playwright.sync_api import sync_playwright
+    
+    cookie_file = Path(__file__).parent.parent / "mimo_cookies.json"
+    BALANCE_URL = "https://platform.xiaomimimo.com/#/console/balance"
+    
+    exe = None
+    for p in [
+        r"C:\Users\20107\AppData\Local\ms-playwright\chromium-1228\chrome-win64\chrome.exe",
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    ]:
+        if os.path.exists(p):
+            exe = p
+            break
+    
+    with sync_playwright() as pw:
+        kw = {"executable_path": exe} if exe else {}
+        browser = pw.chromium.launch(headless=False, **kw)
+        context = browser.new_context()
+        page = context.new_page()
+        page.goto(BALANCE_URL)
+        # Wait for redirect to complete before checking URL (avoid race condition)
+        page.wait_for_timeout(3000)
+        
+        start = time.time()
+        while time.time() - start < 300:
+            url = page.url
+            if "platform.xiaomimimo.com" in url and "account.xiaomi.com" not in url:
+                page.wait_for_load_state("networkidle", timeout=30000)
+                page.wait_for_timeout(3000)
+                cookies = context.cookies()
+                mimo = [c for c in cookies if "xiaomimimo" in c.get("domain", "") or "xiaomi" in c.get("domain", "")]
+                cookie_file.write_text(_json.dumps(mimo, indent=2, ensure_ascii=False))
+                browser.close()
+                return {"status": "ok", "message": f"登录成功，已保存 {len(mimo)} 个 Cookie"}
+            page.wait_for_timeout(2000)
+        
+        browser.close()
+        return {"status": "timeout", "message": "登录超时（5分钟）"}
+
+
+@app.get("/api/balance/login")
+async def api_balance_login():
+    """Open browser for MiMo login, auto-save cookies when logged in (thread-safe)."""
+    import asyncio
+    try:
+        result = await asyncio.to_thread(_mimo_login_sync)
+        return result
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+def _query_mimo_balance_sync(cookies):
+    """Synchronous MiMo balance query - runs in thread pool."""
+    import re
+    import os
+    from playwright.sync_api import sync_playwright
+    
+    exe = None
+    for p in [
+        r"C:\Users\20107\AppData\Local\ms-playwright\chromium-1228\chrome-win64\chrome.exe",
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    ]:
+        if os.path.exists(p):
+            exe = p
+            break
+    
+    with sync_playwright() as pw:
+        kw = {"executable_path": exe} if exe else {}
+        browser = pw.chromium.launch(headless=True, **kw)
+        context = browser.new_context()
+        context.add_cookies(cookies)
+        page = context.new_page()
+        page.goto("https://platform.xiaomimimo.com/#/console/balance")
+        page.wait_for_load_state("networkidle", timeout=30000)
+        page.wait_for_timeout(8000)
+        
+        if "account.xiaomi.com" in page.url:
+            browser.close()
+            return {"status": "expired", "message": "Cookie 已过期，请重新登录"}
+
+        # Get full text and HTML for parsing
+        body_text = page.evaluate("document.body.innerText")
+
+        # Check if page content indicates login page (overlay without redirect)
+        login_indicators = ["请输入密码", "短信登录", "扫码登录"]
+        if any(ind in body_text for ind in login_indicators):
+            browser.close()
+            return {"status": "expired", "message": "需要重新登录"}
+
+        html = page.content()
+        browser.close()
+    
+    result = {"status": "ok", "balances": {}}
+    
+    # Patterns: Chinese + English labels, with optional ¥/￥ prefix
+    # Order: specific patterns first, general patterns last
+    patterns = [
+        # Chinese labels
+        (r'(?:充值余额|现金余额|可用余额)[：:\s]*[¥￥]?\s*([\d,.]+)', 'cash'),
+        (r'(?:赠送余额|奖励余额|免费额度)[：:\s]*[¥￥]?\s*([\d,.]+)', 'bonus'),
+        (r'(?:账户余额|总余额|余额)[：:\s]*[¥￥]?\s*([\d,.]+)', 'total'),
+        # English labels
+        (r'(?:Cash Balance|Recharged Balance|Available Balance)[：:\s]*[¥￥\$]?\s*([\d,.]+)', 'cash'),
+        (r'(?:Bonus Balance|Gift Balance|Free Credits|Granted)[：:\s]*[¥￥\$]?\s*([\d,.]+)', 'bonus'),
+        (r'(?:Total Balance|Account Balance|Balance)[：:\s]*[¥￥\$]?\s*([\d,.]+)', 'total'),
+        # Generic: any number after ¥/￥ symbol
+        (r'[¥￥]\s*([\d,.]+)', 'total'),
+    ]
+    
+    for pat, key in patterns:
+        m = re.search(pat, body_text, re.IGNORECASE)
+        if m:
+            val = float(m.group(1).replace(",", ""))
+            if key not in result["balances"]:  # first match wins per key
+                result["balances"][key] = val
+    
+    # Also search HTML for balance data (e.g. data attributes, JSON)
+    if not result["balances"]:
+        # Try to find number patterns in HTML near balance-related text
+        html_pat = re.findall(r'[¥￥]([\d,.]+)', html)
+        if html_pat:
+            result["balances"]["total"] = float(html_pat[0].replace(",", ""))
+    
+    if not result["balances"]:
+        result["status"] = "parse_error"
+        result["message"] = "无法解析余额数据"
+        result["body_text"] = body_text[:8000]
+    
+    return result
+
+
+@app.get("/api/balance")
+async def api_balance():
+    """Query MiMo balance using saved cookies (thread-safe)."""
+    import asyncio
+    import json as _json
+    cookie_file = Path(__file__).parent.parent / "mimo_cookies.json"
+    
+    if not cookie_file.exists():
+        return {"status": "no_cookies", "message": "未登录，请先运行 mimo_balance.py 登录"}
+    
+    try:
+        cookies = _json.loads(cookie_file.read_text(encoding="utf-8"))
+        if not cookies:
+            return {"status": "no_cookies", "message": "Cookie 为空，请重新登录"}
+    except Exception as e:
+        return {"status": "error", "message": f"Cookie 文件读取失败: {e}"}
+    
+    try:
+        result = await asyncio.to_thread(_query_mimo_balance_sync, cookies)
+        return result
+    except Exception as e:
+        return {"status": "error", "message": f"查询失败: {str(e)}"}
 
 
 def main():
