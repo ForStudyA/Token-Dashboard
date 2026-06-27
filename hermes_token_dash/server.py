@@ -186,7 +186,7 @@ def api_models(source: str = Query(""), profile: str = Query(""), time: str = Qu
     if time:
         records = _apply_time_filter(records, time, start, end)
     models = get_available_models(records)
-    counts = {m: sum(1 for r in records if r.model == m) for m in models}
+    counts = {m: sum(r.api_call_count for r in records if r.model == m) for m in models}
 
     # Per-source model breakdown (when no source filter)
     by_source: dict[str, dict] = {}
@@ -195,8 +195,8 @@ def api_models(source: str = Query(""), profile: str = Query(""), time: str = Qu
             s = r.data_source
             if s not in by_source:
                 by_source[s] = {"source": s, "models": {}, "total_requests": 0}
-            by_source[s]["total_requests"] += 1
-            by_source[s]["models"][r.model] = by_source[s]["models"].get(r.model, 0) + 1
+            by_source[s]["total_requests"] += r.api_call_count
+            by_source[s]["models"][r.model] = by_source[s]["models"].get(r.model, 0) + r.api_call_count
 
     return {
         "models": [{"name": m, "count": counts[m]} for m in models],
