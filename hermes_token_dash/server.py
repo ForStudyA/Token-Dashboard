@@ -200,7 +200,7 @@ def api_models(source: str = Query(""), profile: str = Query(""), time: str = Qu
 
     return {
         "models": [{"name": m, "count": counts[m]} for m in models],
-        "total": len(records),
+        "total": sum(r.api_call_count for r in records),
         "by_source": [
             {"source": s, "total_requests": d["total_requests"],
              "models": [{"name": m, "count": c} for m, c in sorted(d["models"].items())]}
