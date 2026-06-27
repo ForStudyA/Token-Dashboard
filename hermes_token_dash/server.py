@@ -102,12 +102,12 @@ def _get_records(force: bool = False) -> list:
     return _cache
 
 
-def _apply_time_filter(records: list, time: str, start: str, end: str):
+def _apply_time_filter(records: list, time: str, start: str, end: str, tz_offset: int = 8):
     """Filter *records* by *time* preset or custom [*start*, *end*] ISO range.
 
     When *time* is ``\"custom\"``, *start* and/or *end* (ISO-8601
     datetime strings) are parsed as UTC and used as inclusive bounds.
-    Otherwise ``get_time_cutoff(time)`` is used as a lower bound.
+    Otherwise ``get_time_cutoff(time, tz_offset)`` is used as a lower bound.
     """
     from datetime import datetime, timezone as _tz
     if time == "custom":
@@ -129,7 +129,7 @@ def _apply_time_filter(records: list, time: str, start: str, end: str):
                 pass
         return records
     # Preset filter: "all" | "today" | "7d" | "30d"
-    cutoff = get_time_cutoff(time)
+    cutoff = get_time_cutoff(time, tz_offset)
     return [r for r in records if r.timestamp >= cutoff]
 
 
@@ -177,14 +177,14 @@ def api_profiles():
 
 @app.get("/api/models")
 def api_models(source: str = Query(""), profile: str = Query(""), time: str = Query(""),
-               start: str = Query(""), end: str = Query("")):
+               start: str = Query(""), end: str = Query(""), tz: int = Query(8)):
     records = _get_records()
     if source:
         records = [r for r in records if r.data_source == source]
     if profile:
         records = [r for r in records if r.profile == profile]
     if time:
-        records = _apply_time_filter(records, time, start, end)
+        records = _apply_time_filter(records, time, start, end, tz)
     models = get_available_models(records)
     counts = {m: sum(r.api_call_count for r in records if r.model == m) for m in models}
 
@@ -211,7 +211,7 @@ def api_models(source: str = Query(""), profile: str = Query(""), time: str = Qu
 
 @app.get("/api/stats")
 def api_stats(time: str = Query("all"), model: str = Query(""), source: str = Query(""), profile: str = Query(""), agent: str = Query(""),
-              start: str = Query(""), end: str = Query("")):
+              start: str = Query(""), end: str = Query(""), tz: int = Query(8)):
     records = _get_records()
     if source:
         records = [r for r in records if r.data_source == source]
@@ -220,9 +220,9 @@ def api_stats(time: str = Query("all"), model: str = Query(""), source: str = Qu
     if agent:
         records = [r for r in records if (r.agent or "unknown") == agent]
     if time == "custom":
-        records = _apply_time_filter(records, "custom", start, end)
+        records = _apply_time_filter(records, "custom", start, end, tz)
         time = "all"
-    stats = aggregate_by_model_date(records, time)
+    stats = aggregate_by_model_date(records, time, tz)
 
     if model:
         stats = [s for s in stats if s.model == model]
@@ -251,7 +251,7 @@ def api_stats(time: str = Query("all"), model: str = Query(""), source: str = Qu
 
 @app.get("/api/summary")
 def api_summary(time: str = Query("all"), model: str = Query(""), source: str = Query(""), profile: str = Query(""), agent: str = Query(""),
-                start: str = Query(""), end: str = Query("")):
+                start: str = Query(""), end: str = Query(""), tz: int = Query(8)):
     records = _get_records()
     if source:
         records = [r for r in records if r.data_source == source]
@@ -260,9 +260,9 @@ def api_summary(time: str = Query("all"), model: str = Query(""), source: str = 
     if agent:
         records = [r for r in records if (r.agent or "unknown") == agent]
     if time == "custom":
-        records = _apply_time_filter(records, "custom", start, end)
+        records = _apply_time_filter(records, "custom", start, end, tz)
         time = "all"
-    stats = aggregate_by_model_date(records, time)
+    stats = aggregate_by_model_date(records, time, tz)
     if model:
         stats = [s for s in stats if s.model == model]
 
@@ -340,7 +340,8 @@ def _compute_by_source_summary(records: list, time: str) -> list[dict]:
 def api_logs(time: str = Query("all"), model: str = Query(""),
              source: str = Query(""), profile: str = Query(""), agent: str = Query(""),
              start: str = Query(""), end: str = Query(""),
-             page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=500)):
+             page: int = Query(1, ge=1), limit: int = Query(50, ge=1, le=500),
+             tz: int = Query(8)):
     """Return paginated raw TokenUsage records with timestamps."""
     records = _get_records()
     if source:
@@ -350,7 +351,7 @@ def api_logs(time: str = Query("all"), model: str = Query(""),
     if agent:
         records = [r for r in records if (r.agent or "unknown") == agent]
 
-    filtered = _apply_time_filter(records, time, start, end)
+    filtered = _apply_time_filter(records, time, start, end, tz)
     if model:
         filtered = [r for r in filtered if r.model == model]
 

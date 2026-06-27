@@ -298,7 +298,7 @@ function stime(iso,tz){if(!iso)return'';const d=new Date(iso);if(isNaN(d.getTime
 function toggleSort(f){if(sf.value===f)sd.value*=-1;else{sf.value=f;sd.value=1}}
 
 const q=(p={})=>{let s=new URLSearchParams();Object.entries(p).forEach(([k,v])=>{if(v)s.set(k,v)});return'?'+s.toString()}
-function timeParams(){const p={time:timeFilter.value};if(timeFilter.value==='custom'){if(fpStart.value&&fpStart.value.selectedDates[0])p.start=fpStart.value.selectedDates[0].toISOString();if(fpEnd.value&&fpEnd.value.selectedDates[0])p.end=fpEnd.value.selectedDates[0].toISOString()}return p}
+function timeParams(){const p={time:timeFilter.value,tz:timezoneFilter.value};if(timeFilter.value==='custom'){if(fpStart.value&&fpStart.value.selectedDates[0])p.start=fpStart.value.selectedDates[0].toISOString();if(fpEnd.value&&fpEnd.value.selectedDates[0])p.end=fpEnd.value.selectedDates[0].toISOString()}return p}
 function toDtLocal(d){const p=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+'T'+p(d.getHours())+':'+p(d.getMinutes())}
 let prevTime='30d'
 function onTimeFilterChange(){
