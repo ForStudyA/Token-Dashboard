@@ -155,6 +155,7 @@ class ModelStats:
     cache_hit_rate: float = 0.0       # request-level: requests_with_cache / request_count
     token_hit_rate: float = 0.0       # token-level: total_cache_read / total_input
     estimated_cost: float = 0.0
+    user_input_count: int = 0         # 用户输入次数
 
     def compute_derived(self) -> None:
         """Compute cache_hit_rate and estimated_cost from raw totals.

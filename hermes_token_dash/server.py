@@ -31,6 +31,29 @@ from hermes_token_dash.parser_claude import (
 from hermes_token_dash.parser_codex import parse_codex_jsonl, scan_codex_jsonls
 from hermes_token_dash.parser_hermes import parse_hermes_sessions
 
+def _get_user_input_counts() -> dict[str, int]:
+    """Get user input count per model from Hermes messages table."""
+    import sqlite3
+    import os
+    counts = {}
+    db_path = os.path.expanduser("~/AppData/Local/hermes/state.db")
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT s.model, COUNT(*) as cnt
+            FROM messages m
+            JOIN sessions s ON m.session_id = s.id
+            WHERE m.role = 'user' AND s.model IS NOT NULL
+            GROUP BY s.model
+        """)
+        for row in cur.fetchall():
+            counts[row[0]] = row[1]
+        conn.close()
+    except Exception:
+        pass
+    return counts
+
 app = FastAPI(title="Hermes Token Dashboard")
 
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"],
@@ -204,6 +227,9 @@ def api_stats(time: str = Query("all"), model: str = Query(""), source: str = Qu
     if model:
         stats = [s for s in stats if s.model == model]
 
+    # 获取每个模型的用户输入次数
+    user_input_counts = _get_user_input_counts()
+
     result = []
     for s in stats:
         result.append({
@@ -218,6 +244,7 @@ def api_stats(time: str = Query("all"), model: str = Query(""), source: str = Qu
             "hit_rate": round(s.cache_hit_rate, 1),
             "token_hit_rate": round(s.token_hit_rate, 1),
             "cost": round(s.estimated_cost, 4),
+            "user_inputs": user_input_counts.get(s.model, 0),
         })
     return result
 
