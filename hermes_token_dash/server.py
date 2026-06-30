@@ -37,6 +37,8 @@ from hermes_token_dash.proxy_db import (
     get_proxy_enabled,
     delete_provider,
     delete_mapping,
+    toggle_provider,
+    toggle_mapping,
     insert_request_log,
     list_mappings,
     list_providers,
@@ -429,6 +431,11 @@ def api_proxy_delete_provider(provider_id: int):
     return {"ok": True, "providers": list_providers()}
 
 
+@app.post("/api/proxy/providers/{provider_id}/toggle")
+def api_proxy_toggle_provider(provider_id: int):
+    return toggle_provider(provider_id)
+
+
 @app.get("/api/proxy/mappings")
 def api_proxy_mappings():
     return {"mappings": list_mappings()}
@@ -450,6 +457,11 @@ def api_proxy_save_mapping(body: ProxyMappingBody):
 def api_proxy_delete_mapping(mapping_id: int):
     delete_mapping(mapping_id)
     return {"ok": True, "mappings": list_mappings()}
+
+
+@app.post("/api/proxy/mappings/{mapping_id}/toggle")
+def api_proxy_toggle_mapping(mapping_id: int):
+    return toggle_mapping(mapping_id)
 
 
 @app.get("/api/proxy/logs")
