@@ -28,15 +28,6 @@ from hermes_token_dash.parser_claude import (
     aggregate_by_model_date,
     get_available_models,
     get_time_cutoff,
-    parse_jsonl,
-    scan_claude_jsonls,
-)
-from hermes_token_dash.parser_codex import (
-    parse_codex_jsonl,
-    scan_codex_jsonls,
-)
-from hermes_token_dash.parser_hermes import (
-    parse_hermes_sessions,
 )
 from hermes_token_dash.proxy_db import (
     get_default_provider,
@@ -108,58 +99,10 @@ _file_cache: dict[str, tuple[float, int, list]] = {}
 
 
 def _load_cache() -> list:
-    """Scan and parse all JSONL files + Hermes session DBs + Codex sessions.
-
-    Uses incremental file-level caching: only re-parses files whose
-    mtime or size changed since last load.  Unchanged files reuse their
-    cached records.
-    """
+    """Load records from proxy database only."""
     global _cache, _cache_time
 
-    import os
-
     records: list = parse_proxy_request_logs()
-    seen_files: set[str] = set()
-
-    # Claude Code
-    for f in scan_claude_jsonls():
-        key = str(f)
-        seen_files.add(key)
-        try:
-            st = os.stat(f)
-            cached = _file_cache.get(key)
-            if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
-                records.extend(cached[2])
-            else:
-                recs = parse_jsonl(f)
-                _file_cache[key] = (st.st_mtime, st.st_size, recs)
-                records.extend(recs)
-        except OSError:
-            records.extend(parse_jsonl(f))
-
-    # Hermes Agent (no file-level cache — reads DBs directly)
-    records.extend(parse_hermes_sessions())
-
-    # Codex CLI
-    for f in scan_codex_jsonls():
-        key = str(f)
-        seen_files.add(key)
-        try:
-            st = os.stat(f)
-            cached = _file_cache.get(key)
-            if cached and cached[0] == st.st_mtime and cached[1] == st.st_size:
-                records.extend(cached[2])
-            else:
-                recs = parse_codex_jsonl(f)
-                _file_cache[key] = (st.st_mtime, st.st_size, recs)
-                records.extend(recs)
-        except OSError:
-            records.extend(parse_codex_jsonl(f))
-
-    # Purge entries for files that no longer exist
-    stale = set(_file_cache) - seen_files
-    for k in stale:
-        del _file_cache[k]
 
     with _cache_lock:
         _cache = records
