@@ -76,6 +76,7 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
                 target_model TEXT NOT NULL,
                 provider_id INTEGER NOT NULL,
                 enabled INTEGER NOT NULL DEFAULT 1,
+                protected INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL,
                 FOREIGN KEY(provider_id) REFERENCES proxy_providers(id)
@@ -140,6 +141,26 @@ def init_db(conn: sqlite3.Connection | None = None) -> None:
                     DROP TABLE model_mappings;
                     ALTER TABLE model_mappings_new RENAME TO model_mappings;
                 """)
+        except Exception:
+            pass
+        # 迁移：添加 protected 列
+        try:
+            conn.execute("SELECT protected FROM model_mappings LIMIT 1")
+        except Exception:
+            conn.execute("ALTER TABLE model_mappings ADD COLUMN protected INTEGER NOT NULL DEFAULT 0")
+        # 自动创建"原样转发"映射（如果不存在）
+        try:
+            default_p = conn.execute("SELECT id FROM proxy_providers WHERE enabled=1 LIMIT 1").fetchone()
+            if default_p:
+                exists = conn.execute(
+                    "SELECT id FROM model_mappings WHERE source_model='*' AND target_model='*' AND protected=1"
+                ).fetchone()
+                if not exists:
+                    ts = now_epoch()
+                    conn.execute(
+                        "INSERT INTO model_mappings (source_model, target_model, provider_id, enabled, protected, created_at, updated_at) VALUES (?, ?, ?, 1, 1, ?, ?)",
+                        ("*", "*", default_p["id"], ts, ts),
+                    )
         except Exception:
             pass
         conn.commit()
@@ -361,6 +382,9 @@ def delete_provider(provider_id: int) -> dict[str, Any]:
 
 def delete_mapping(mapping_id: int) -> dict[str, Any]:
     with closing(connect()) as conn:
+        row = conn.execute("SELECT protected FROM model_mappings WHERE id = ?", (mapping_id,)).fetchone()
+        if row and row["protected"]:
+            return {"ok": False, "error": "Cannot delete protected mapping"}
         conn.execute("DELETE FROM model_mappings WHERE id = ?", (mapping_id,))
         conn.commit()
     return {"ok": True}
@@ -371,16 +395,17 @@ def list_mappings() -> list[dict[str, Any]]:
         rows = conn.execute(
             """
             SELECT m.id, m.source_model, m.target_model, m.provider_id,
-                   p.name AS provider_name, m.enabled, m.created_at, m.updated_at
+                   p.name AS provider_name, m.enabled, m.protected, m.created_at, m.updated_at
               FROM model_mappings m
               JOIN proxy_providers p ON p.id = m.provider_id
-             ORDER BY m.source_model
+             ORDER BY m.protected DESC, m.source_model
             """
         ).fetchall()
     result = []
     for row in rows:
         item = dict(row)
         item["enabled"] = bool(item["enabled"])
+        item["protected"] = bool(item["protected"])
         result.append(item)
     return result
 

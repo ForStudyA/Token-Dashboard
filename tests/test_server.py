@@ -492,7 +492,8 @@ class TestHermesProxyPassthrough:
         assert captured["target_model"] == "hermes-config-model"
         assert captured["provider"] is provider
 
-    def test_mimo_chat_uses_xiaomi_upstream_and_incoming_auth(self, monkeypatch, client):
+    def test_any_model_uses_default_provider_with_mapping(self, monkeypatch, client):
+        """All models (including mimo) route through default provider + active mapping."""
         from fastapi.responses import JSONResponse
         from hermes_token_dash import server as srv
 
@@ -501,6 +502,7 @@ class TestHermesProxyPassthrough:
             name="ds",
             base_url="http://deepseek.test/v1",
             api_key="deepseek-key",
+            enabled=True,
         )
         captured = {}
 
@@ -527,23 +529,21 @@ class TestHermesProxyPassthrough:
             return JSONResponse({"ok": True})
 
         monkeypatch.setattr(srv, "get_default_provider", lambda: ds_provider)
-        monkeypatch.setattr(srv, "get_provider_by_name", lambda name: None)
+        monkeypatch.setattr(srv, "get_provider", lambda pid: ds_provider if pid == 1 else None)
         monkeypatch.setattr(srv, "get_active_mapping", lambda: {"target_model": "deepseek-v4-flash", "provider_id": 1})
         monkeypatch.setattr(srv, "_proxy_chat_json", fake_proxy_chat_json)
 
         resp = client.post(
             "/v1/chat/completions",
-            headers={"Authorization": "Bearer xiaomi-token"},
             json={"model": "mimo-v2.5", "messages": [], "stream": False},
         )
 
         assert resp.status_code == 200
-        assert captured["upstream_url"] == "https://api.xiaomimimo.com/v1/chat/completions"
-        assert captured["headers"]["Authorization"] == "Bearer xiaomi-token"
-        assert captured["upstream_body"]["model"] == "mimo-v2.5"
+        assert captured["upstream_url"] == "http://deepseek.test/v1/chat/completions"
+        assert captured["upstream_body"]["model"] == "deepseek-v4-flash"
         assert captured["request_model"] == "mimo-v2.5"
-        assert captured["target_model"] == "mimo-v2.5"
-        assert captured["provider"].name == "mimo"
+        assert captured["target_model"] == "deepseek-v4-flash"
+        assert captured["provider"].name == "ds"
 
     def test_models_fallback_without_provider(self, monkeypatch, client):
         from hermes_token_dash import server as srv
