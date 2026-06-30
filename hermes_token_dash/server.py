@@ -852,14 +852,11 @@ async def _proxy_chat_json(
         payload = json.loads(content.decode("utf-8"))
         request_id = payload.get("id") or request_id
         raw_usage = _extract_usage_from_payload(payload)
-        response_model = _extract_response_model(payload)
         if status_code >= 400 and not error_message:
             error_message = _extract_error_text(payload)
     except Exception:
-        response_model = ""
         if status_code >= 400 and not error_message:
             error_message = content.decode("utf-8", errors="ignore")[:1000]
-    actual_model = response_model or target_model
 
     latency_ms = int((time.perf_counter() - start_ts) * 1000)
     insert_request_log(
@@ -869,7 +866,7 @@ async def _proxy_chat_json(
         provider_name=provider.name,
         endpoint="/v1/chat/completions",
         request_model=request_model,
-        model=actual_model,
+        model=target_model,
         raw_usage=raw_usage,
         status_code=status_code,
         error_message=error_message,
@@ -898,7 +895,6 @@ async def _proxy_chat_stream(
 
     request_id = str(uuid.uuid4())
     raw_usage = None
-    response_model = ""
     error_message = ""
     first_token_ms = 0
     upstream_resp = None
@@ -970,7 +966,7 @@ async def _proxy_chat_stream(
                     chunk,
                     lambda rid: _set_request_id(rid),
                     lambda usage: _set_usage(usage),
-                    lambda model: _set_response_model(model),
+                    lambda model: None,
                 )
                 yield chunk
         except GeneratorExit:
@@ -991,7 +987,7 @@ async def _proxy_chat_stream(
                     provider_name=provider.name,
                     endpoint="/v1/chat/completions",
                     request_model=request_model,
-                    model=response_model or target_model,
+                    model=target_model,
                     raw_usage=raw_usage,
                     status_code=499 if error_message == "client_aborted" else status_code,
                     error_message=error_message,
@@ -1011,11 +1007,6 @@ async def _proxy_chat_stream(
     def _set_usage(value: dict[str, Any]):
         nonlocal raw_usage
         raw_usage = value
-
-    def _set_response_model(value: str):
-        nonlocal response_model
-        if value:
-            response_model = value
 
     return StreamingResponse(
         body_iter(),
