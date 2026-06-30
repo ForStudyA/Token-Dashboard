@@ -395,11 +395,9 @@ def toggle_provider(provider_id: int) -> dict[str, Any]:
 def toggle_mapping(mapping_id: int) -> dict[str, Any]:
     ts = now_epoch()
     with closing(connect()) as conn:
-        row = conn.execute("SELECT enabled, protected FROM model_mappings WHERE id = ?", (mapping_id,)).fetchone()
+        row = conn.execute("SELECT enabled FROM model_mappings WHERE id = ?", (mapping_id,)).fetchone()
         if not row:
             return {"ok": False, "error": "Mapping not found"}
-        if row["protected"]:
-            return {"ok": False, "error": "Cannot disable protected mapping"}
         new_val = 0 if row["enabled"] else 1
         conn.execute("UPDATE model_mappings SET enabled = ?, updated_at = ? WHERE id = ?", (new_val, ts, mapping_id))
         conn.commit()
