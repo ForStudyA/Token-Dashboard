@@ -28,9 +28,19 @@ from hermes_token_dash.parser_claude import (
     aggregate_by_model_date,
     get_available_models,
     get_time_cutoff,
+    parse_jsonl,
+    scan_claude_jsonls,
+)
+from hermes_token_dash.parser_codex import (
+    parse_codex_jsonl,
+    scan_codex_jsonls,
+)
+from hermes_token_dash.parser_hermes import (
+    parse_hermes_sessions,
 )
 from hermes_token_dash.proxy_db import (
     get_default_provider,
+    get_provider,
     get_active_mapping,
     set_active_mapping,
     get_proxy_enabled,
@@ -105,15 +115,10 @@ def _load_cache() -> list:
     cached records.
     """
     global _cache, _cache_time
-    records = parse_proxy_request_logs()
-    with _cache_lock:
-        _cache = records
-        _cache_time = time.time()
-    return _cache
 
     import os
 
-    records: list = []
+    records: list = parse_proxy_request_logs()
     seen_files: set[str] = set()
 
     # Claude Code
@@ -244,7 +249,11 @@ def _record_cost_cny(record) -> float:
 
 @app.get("/")
 def index():
-    return FileResponse(str(STATIC / "index.html"))
+    resp = FileResponse(str(STATIC / "index.html"))
+    resp.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    resp.headers["Pragma"] = "no-cache"
+    resp.headers["Expires"] = "0"
+    return resp
 
 
 class ProxyProviderBody(BaseModel):
@@ -270,6 +279,22 @@ class ProxyEnabledBody(BaseModel):
 class ProxyActiveMappingBody(BaseModel):
     target_model: str
     provider_id: int
+
+
+PROXY_URL = "http://127.0.0.1:8765/v1"
+
+
+def _toggle_agent_configs(enable_proxy: bool) -> None:
+    """Toggle proxy for all registered agent adapters."""
+    from hermes_token_dash.adapters import ADAPTERS
+    for name, cls in ADAPTERS.items():
+        adapter = cls()
+        if not adapter.is_installed():
+            continue
+        if enable_proxy:
+            adapter.set_proxy_url(PROXY_URL)
+        else:
+            adapter.restore_original()
 
 
 def _upstream_chat_url(base_url: str) -> str:
@@ -474,6 +499,8 @@ def api_proxy_status():
 @app.post("/api/proxy/status")
 def api_proxy_save_status(body: ProxyEnabledBody):
     set_proxy_enabled(body.enabled)
+    # 代理开关同时切换所有 agent 配置
+    _toggle_agent_configs(body.enabled)
     return {"ok": True, "enabled": get_proxy_enabled()}
 
 
