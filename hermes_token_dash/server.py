@@ -264,6 +264,15 @@ def _toggle_agent_configs(enable_proxy: bool) -> None:
             adapter.restore_original()
 
 
+@app.on_event("shutdown")
+async def _restore_agent_configs_on_shutdown():
+    """Restore agent configs so a stopped server does not strand agents on localhost."""
+    try:
+        _toggle_agent_configs(False)
+    except Exception:
+        pass
+
+
 def _upstream_chat_url(base_url: str) -> str:
     base = base_url.rstrip("/")
     if base.endswith("/v1"):
@@ -490,6 +499,10 @@ def _extract_model_ids(payload: Any) -> list[str]:
     return values
 
 
+def _has_valid_model_list(payload: Any) -> bool:
+    return bool(_extract_model_ids(payload))
+
+
 def _get_active_provider_for_metadata():
     active = get_active_mapping()
     provider_id = int(active.get("provider_id") or 0)
@@ -603,11 +616,11 @@ def api_proxy_test_provider(provider_id: int):
         return JSONResponse(status_code=404, content={"ok": False, "error": "Provider not found"})
     status_code, payload, error = _read_upstream_json(_upstream_models_url(provider.base_url), provider)
     models = _extract_model_ids(payload)
-    ok = 200 <= status_code < 300
+    ok = 200 <= status_code < 300 and _has_valid_model_list(payload)
     return {
         "ok": ok,
         "status_code": status_code,
-        "message": "连接成功，API Key 可用" if ok else (error or "连接失败"),
+        "message": "连接成功，API Key 可用" if ok else (error or "未获取到有效模型列表"),
         "models": models,
         "model_count": len(models),
     }
@@ -621,9 +634,9 @@ def api_proxy_provider_models(provider_id: int):
     status_code, payload, error = _read_upstream_json(_upstream_models_url(provider.base_url), provider)
     models = _extract_model_ids(payload)
     return {
-        "ok": 200 <= status_code < 300,
+        "ok": 200 <= status_code < 300 and _has_valid_model_list(payload),
         "status_code": status_code,
-        "error": error,
+        "error": error or ("" if models else "未获取到有效模型列表"),
         "models": models,
     }
 
@@ -832,6 +845,7 @@ async def _proxy_chat_json(
     error_message = ""
     content = b""
     media_type = "application/json"
+    response_model = target_model
 
     try:
         data = json.dumps(upstream_body).encode("utf-8")
@@ -852,6 +866,7 @@ async def _proxy_chat_json(
         payload = json.loads(content.decode("utf-8"))
         request_id = payload.get("id") or request_id
         raw_usage = _extract_usage_from_payload(payload)
+        response_model = _extract_response_model(payload) or target_model
         if status_code >= 400 and not error_message:
             error_message = _extract_error_text(payload)
     except Exception:
@@ -866,7 +881,7 @@ async def _proxy_chat_json(
         provider_name=provider.name,
         endpoint="/v1/chat/completions",
         request_model=request_model,
-        model=target_model,
+        model=response_model,
         raw_usage=raw_usage,
         status_code=status_code,
         error_message=error_message,
@@ -898,6 +913,7 @@ async def _proxy_chat_stream(
     error_message = ""
     first_token_ms = 0
     upstream_resp = None
+    response_model = target_model
 
     try:
         data = json.dumps(upstream_body).encode("utf-8")
@@ -954,7 +970,7 @@ async def _proxy_chat_stream(
     status_code = upstream_resp.status
 
     def body_iter():
-        nonlocal request_id, raw_usage, error_message, first_token_ms
+        nonlocal request_id, raw_usage, error_message, first_token_ms, response_model
         try:
             while True:
                 chunk = upstream_resp.read(8192)
@@ -966,7 +982,7 @@ async def _proxy_chat_stream(
                     chunk,
                     lambda rid: _set_request_id(rid),
                     lambda usage: _set_usage(usage),
-                    lambda model: None,
+                    lambda model: _set_response_model(model),
                 )
                 yield chunk
         except GeneratorExit:
@@ -987,7 +1003,7 @@ async def _proxy_chat_stream(
                     provider_name=provider.name,
                     endpoint="/v1/chat/completions",
                     request_model=request_model,
-                    model=target_model,
+                    model=response_model,
                     raw_usage=raw_usage,
                     status_code=499 if error_message == "client_aborted" else status_code,
                     error_message=error_message,
@@ -1007,6 +1023,11 @@ async def _proxy_chat_stream(
     def _set_usage(value: dict[str, Any]):
         nonlocal raw_usage
         raw_usage = value
+
+    def _set_response_model(value: str):
+        nonlocal response_model
+        if value:
+            response_model = value
 
     return StreamingResponse(
         body_iter(),

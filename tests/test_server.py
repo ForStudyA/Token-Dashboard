@@ -574,6 +574,64 @@ class TestHermesProxyPassthrough:
         assert captured["target_model"] == "upstream-model"
         assert captured["provider"] is provider
 
+    def test_proxy_chat_json_logs_response_model(self, monkeypatch):
+        import asyncio
+        import json
+        import urllib.request
+
+        from hermes_token_dash import server as srv
+
+        provider = SimpleNamespace(
+            id=2,
+            name="mapped",
+            base_url="http://mapped.test/v1",
+            api_key="mapped-key",
+            enabled=True,
+        )
+        captured = {}
+
+        class Headers:
+            def get_content_type(self):
+                return "application/json"
+
+        class FakeResponse:
+            status = 200
+            headers = Headers()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps({
+                    "id": "resp-1",
+                    "model": "actual-upstream-model",
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+                }).encode("utf-8")
+
+        monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=600: FakeResponse())
+        monkeypatch.setattr(srv, "_load_cache", lambda: None)
+        monkeypatch.setattr(srv, "insert_request_log", lambda **kwargs: captured.update(kwargs))
+
+        resp = asyncio.run(
+            srv._proxy_chat_json(
+                "http://mapped.test/v1/chat/completions",
+                {"Content-Type": "application/json"},
+                {"model": "target-model", "messages": []},
+                provider,
+                "request-model",
+                "target-model",
+                123,
+                1.0,
+            )
+        )
+
+        assert resp.status_code == 200
+        assert captured["request_model"] == "request-model"
+        assert captured["model"] == "actual-upstream-model"
+
     def test_chat_completion_normalizes_responses_style_body(self, monkeypatch, client):
         from fastapi.responses import JSONResponse
         from hermes_token_dash import server as srv
@@ -657,6 +715,32 @@ class TestHermesProxyPassthrough:
         assert data["ok"] is True
         assert data["models"] == ["model-a", "model-b"]
         assert data["model_count"] == 2
+
+    def test_provider_test_endpoint_rejects_empty_model_list(self, monkeypatch, client):
+        from hermes_token_dash import server as srv
+
+        provider = SimpleNamespace(
+            id=7,
+            name="provider",
+            base_url="http://provider.test/v1",
+            api_key="key",
+            enabled=True,
+        )
+
+        monkeypatch.setattr(srv, "get_provider", lambda pid: provider if pid == 7 else None)
+        monkeypatch.setattr(
+            srv,
+            "_read_upstream_json",
+            lambda url, provider, method="GET", body=None: (200, {"ok": True}, ""),
+        )
+
+        resp = client.post("/api/proxy/providers/7/test")
+
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["ok"] is False
+        assert data["model_count"] == 0
+        assert "模型列表" in data["message"]
 
     def test_active_models_endpoint_uses_active_provider(self, monkeypatch, client):
         from fastapi.responses import JSONResponse

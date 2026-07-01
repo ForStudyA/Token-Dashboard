@@ -172,6 +172,7 @@ def _mock_parsers(monkeypatch):
         srv, "aggregate_by_model_date", _mock_aggregate_by_model_date
     )
     monkeypatch.setattr(srv, "get_available_models", _mock_get_available_models)
+    monkeypatch.setattr(srv, "get_proxy_enabled", lambda: True)
     # 替换 MODEL_PRICING
     monkeypatch.setattr(
         srv, "MODEL_PRICING", SAMPLE_PRICING.copy()
