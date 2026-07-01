@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -1126,6 +1127,307 @@ class TestHermesProxyPassthrough:
         data = resp.json()
         assert data["name"] == "hermes-config-model"
         assert "tools" in data["capabilities"]
+
+
+class TestClaudeCodeProxy:
+    def test_messages_uses_active_mapping_and_converts_body(self, monkeypatch, client):
+        from fastapi.responses import JSONResponse
+        from hermes_token_dash import server as srv
+
+        provider = SimpleNamespace(
+            id=2,
+            name="mapped",
+            base_url="http://mapped.test/v1",
+            api_key="mapped-key",
+            enabled=True,
+        )
+        captured = {}
+
+        async def fake_proxy_anthropic_json(
+            upstream_url,
+            headers,
+            upstream_body,
+            provider_arg,
+            request_model,
+            target_model,
+            created_at,
+            start_ts,
+            should_log=True,
+        ):
+            captured.update(
+                {
+                    "upstream_url": upstream_url,
+                    "headers": headers,
+                    "upstream_body": upstream_body,
+                    "provider": provider_arg,
+                    "request_model": request_model,
+                    "target_model": target_model,
+                }
+            )
+            return JSONResponse({"ok": True})
+
+        monkeypatch.setattr(srv, "get_provider", lambda pid: provider if pid == 2 else None)
+        monkeypatch.setattr(
+            srv,
+            "get_active_mapping",
+            lambda: {"mode": "mapping", "target_model": "upstream-model", "provider_id": 2, "mapping_id": 9},
+        )
+        monkeypatch.setattr(srv, "_proxy_anthropic_json", fake_proxy_anthropic_json)
+
+        resp = client.post(
+            "/v1/messages",
+            json={
+                "model": "claude-sonnet-4",
+                "system": "Be brief.",
+                "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello"}]}],
+                "tools": [{"name": "lookup", "description": "Lookup", "input_schema": {"type": "object"}}],
+                "max_tokens": 42,
+            },
+        )
+
+        assert resp.status_code == 200
+        assert captured["upstream_url"] == "http://mapped.test/v1/chat/completions"
+        assert captured["headers"]["Authorization"] == "Bearer mapped-key"
+        assert captured["request_model"] == "claude-sonnet-4"
+        assert captured["target_model"] == "upstream-model"
+        assert captured["upstream_body"]["model"] == "upstream-model"
+        assert captured["upstream_body"]["messages"] == [
+            {"role": "system", "content": "Be brief."},
+            {"role": "user", "content": "Hello"},
+        ]
+        assert captured["upstream_body"]["tools"][0]["function"]["name"] == "lookup"
+        assert captured["upstream_body"]["max_tokens"] == 42
+
+    def test_messages_passthrough_keeps_request_model(self, monkeypatch, client):
+        from fastapi.responses import JSONResponse
+        from hermes_token_dash import server as srv
+
+        provider = SimpleNamespace(
+            id=3,
+            name="passthrough",
+            base_url="http://passthrough.test/v1",
+            api_key="provider-key",
+            enabled=True,
+        )
+        captured = {}
+
+        async def fake_proxy_anthropic_json(
+            upstream_url,
+            headers,
+            upstream_body,
+            provider_arg,
+            request_model,
+            target_model,
+            created_at,
+            start_ts,
+            should_log=True,
+        ):
+            captured.update({"upstream_url": upstream_url, "upstream_body": upstream_body, "target_model": target_model})
+            return JSONResponse({"ok": True})
+
+        monkeypatch.setattr(srv, "get_provider", lambda pid: provider if pid == 3 else None)
+        monkeypatch.setattr(
+            srv,
+            "get_active_mapping",
+            lambda: {"mode": "passthrough", "target_model": "", "provider_id": 3, "mapping_id": 0},
+        )
+        monkeypatch.setattr(srv, "_proxy_anthropic_json", fake_proxy_anthropic_json)
+
+        resp = client.post(
+            "/v1/messages",
+            json={"model": "claude-sonnet-4", "messages": [{"role": "user", "content": "Hi"}]},
+        )
+
+        assert resp.status_code == 200
+        assert captured["upstream_url"] == "http://passthrough.test/v1/chat/completions"
+        assert captured["upstream_body"]["model"] == "claude-sonnet-4"
+        assert captured["target_model"] == "claude-sonnet-4"
+
+    def test_messages_ignores_disabled_active_provider(self, monkeypatch, client):
+        from hermes_token_dash import server as srv
+
+        provider = SimpleNamespace(
+            id=1,
+            name="disabled",
+            base_url="http://disabled.test/v1",
+            api_key="disabled-key",
+            enabled=False,
+        )
+
+        monkeypatch.setattr(srv, "get_provider", lambda pid: provider if pid == 1 else None)
+        monkeypatch.setattr(
+            srv,
+            "get_active_mapping",
+            lambda: {"mode": "passthrough", "target_model": "", "provider_id": 1, "mapping_id": 0},
+        )
+
+        resp = client.post(
+            "/v1/messages",
+            json={"model": "claude-sonnet-4", "messages": [{"role": "user", "content": "Hi"}]},
+        )
+
+        assert resp.status_code == 400
+        assert resp.json()["type"] == "error"
+
+    def test_proxy_anthropic_json_converts_response_and_logs(self, monkeypatch):
+        import asyncio
+        import urllib.request
+        from hermes_token_dash import server as srv
+
+        provider = SimpleNamespace(id=2, name="mapped", base_url="http://mapped.test/v1", api_key="key")
+        captured = {}
+
+        class FakeHeaders:
+            def get_content_type(self):
+                return "application/json"
+
+        class FakeResponse:
+            status = 200
+            headers = FakeHeaders()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def read(self):
+                return json.dumps(
+                    {
+                        "id": "chatcmpl-1",
+                        "model": "actual-model",
+                        "choices": [{"message": {"content": "Hello"}, "finish_reason": "stop"}],
+                        "usage": {"prompt_tokens": 11, "completion_tokens": 7},
+                    }
+                ).encode("utf-8")
+
+        monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=600: FakeResponse())
+        monkeypatch.setattr(srv, "_load_cache", lambda: None)
+        monkeypatch.setattr(srv, "insert_request_log", lambda **kwargs: captured.update(kwargs))
+
+        resp = asyncio.run(
+            srv._proxy_anthropic_json(
+                "http://mapped.test/v1/chat/completions",
+                {"Content-Type": "application/json"},
+                {"model": "target-model", "messages": []},
+                provider,
+                "request-model",
+                "target-model",
+                123,
+                1.0,
+            )
+        )
+
+        assert resp.status_code == 200
+        data = json.loads(resp.body)
+        assert data["type"] == "message"
+        assert data["content"] == [{"type": "text", "text": "Hello"}]
+        assert data["usage"] == {"input_tokens": 11, "output_tokens": 7}
+        assert captured["source_app"] == "claude"
+        assert captured["endpoint"] == "/v1/messages"
+        assert captured["model"] == "actual-model"
+
+    def test_messages_stream_converts_openai_sse(self, monkeypatch, client):
+        import urllib.request
+        from hermes_token_dash import server as srv
+
+        provider = SimpleNamespace(
+            id=2,
+            name="mapped",
+            base_url="http://mapped.test/v1",
+            api_key="mapped-key",
+            enabled=True,
+        )
+        logs = {}
+
+        class FakeStreamResponse:
+            status = 200
+
+            def __init__(self):
+                self._chunks = [
+                    b'data: {"id":"chatcmpl-1","model":"actual-model","choices":[{"delta":{"content":"Hel"}}]}\n\n',
+                    b'data: {"choices":[{"delta":{"content":"lo"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2}}\n\n',
+                    b"data: [DONE]\n\n",
+                ]
+
+            def read(self, _size=-1):
+                return self._chunks.pop(0) if self._chunks else b""
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(srv, "get_provider", lambda pid: provider if pid == 2 else None)
+        monkeypatch.setattr(
+            srv,
+            "get_active_mapping",
+            lambda: {"mode": "mapping", "target_model": "actual-model", "provider_id": 2, "mapping_id": 9},
+        )
+        monkeypatch.setattr(urllib.request, "urlopen", lambda req, timeout=600: FakeStreamResponse())
+        monkeypatch.setattr(srv, "_load_cache", lambda: None)
+        monkeypatch.setattr(srv, "insert_request_log", lambda **kwargs: logs.update(kwargs))
+
+        resp = client.post(
+            "/v1/messages",
+            json={
+                "model": "claude-sonnet-4",
+                "messages": [{"role": "user", "content": "Hi"}],
+                "stream": True,
+            },
+        )
+
+        assert resp.status_code == 200
+        assert "event: message_start" in resp.text
+        assert "event: content_block_delta" in resp.text
+        assert "Hel" in resp.text
+        assert "lo" in resp.text
+        assert "event: message_stop" in resp.text
+        assert logs["source_app"] == "claude"
+        assert logs["is_streaming"] is True
+        assert logs["raw_usage"] == {"prompt_tokens": 3, "completion_tokens": 2}
+
+
+class TestProxyAgents:
+    def test_proxy_agents_endpoint_lists_registered_adapters(self, monkeypatch, client):
+        from hermes_token_dash import server as srv
+
+        monkeypatch.setattr(
+            srv,
+            "_agent_statuses",
+            lambda: [
+                {
+                    "name": "claude_code",
+                    "display_name": "Claude Code",
+                    "installed": True,
+                    "config_path": "settings.json",
+                    "current_base_url": "http://127.0.0.1:8765",
+                    "proxied": True,
+                }
+            ],
+        )
+
+        resp = client.get("/api/proxy/agents")
+
+        assert resp.status_code == 200
+        assert resp.json()["agents"][0]["name"] == "claude_code"
+        assert resp.json()["agents"][0]["proxied"] is True
+
+    def test_proxy_agent_sync_endpoint_syncs_one_adapter(self, monkeypatch, client):
+        from hermes_token_dash import server as srv
+
+        captured = {}
+
+        def fake_sync(agent_name, enabled):
+            captured["agent_name"] = agent_name
+            captured["enabled"] = enabled
+            return {"ok": True, "name": agent_name, "proxied": enabled}
+
+        monkeypatch.setattr(srv, "_sync_agent_config", fake_sync)
+
+        resp = client.post("/api/proxy/agents/claude_code/sync", json={"enabled": True})
+
+        assert resp.status_code == 200
+        assert resp.json()["ok"] is True
+        assert captured == {"agent_name": "claude_code", "enabled": True}
 
 
 class TestUtilityFunctions:

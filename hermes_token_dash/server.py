@@ -277,6 +277,33 @@ def _toggle_agent_configs(enable_proxy: bool) -> None:
             print(f"[token-dashboard] proxy restored for {adapter.display_name}: {'ok' if ok else 'failed'}", flush=True)
 
 
+def _agent_statuses() -> list[dict[str, Any]]:
+    from hermes_token_dash.adapters import ADAPTERS
+
+    statuses = []
+    for name, cls in ADAPTERS.items():
+        adapter = cls()
+        status = adapter.get_status()
+        status["proxied"] = _is_local_proxy_url(status.get("current_base_url"))
+        statuses.append(status)
+    return statuses
+
+
+def _sync_agent_config(agent_name: str, enable_proxy: bool) -> dict[str, Any]:
+    from hermes_token_dash.adapters import ADAPTERS
+
+    cls = ADAPTERS.get(agent_name)
+    if not cls:
+        return {"ok": False, "error": "Unknown agent"}
+    adapter = cls()
+    if not adapter.is_installed():
+        return {"ok": False, "error": "Agent is not installed", **adapter.get_status()}
+    ok = adapter.set_proxy_url(PROXY_URL) if enable_proxy else adapter.restore_original()
+    status = adapter.get_status()
+    status["proxied"] = _is_local_proxy_url(status.get("current_base_url"))
+    return {"ok": ok, **status}
+
+
 def _run_agent_config_task(enable_proxy: bool, label: str, wait_seconds: float = 3.0) -> bool:
     """Run agent config changes without letting slow file/db locks hang the server."""
     done = threading.Event()
@@ -610,6 +637,167 @@ def _normalize_chat_request_body(body: dict[str, Any], target_model: str) -> dic
     return upstream_body
 
 
+def _anthropic_error(message: str, status_code: int = 400) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "type": "error",
+            "error": {
+                "type": "api_error" if status_code >= 500 else "invalid_request_error",
+                "message": message,
+            },
+        },
+    )
+
+
+def _anthropic_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text") or ""))
+        return "\n".join(part for part in parts if part)
+    return ""
+
+
+def _anthropic_tools_to_openai(tools: list[Any]) -> list[dict[str, Any]]:
+    result = []
+    for tool in tools or []:
+        if not isinstance(tool, dict) or not tool.get("name"):
+            continue
+        result.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": tool["name"],
+                    "description": tool.get("description") or "",
+                    "parameters": tool.get("input_schema") or {"type": "object", "properties": {}},
+                },
+            }
+        )
+    return result
+
+
+def _anthropic_messages_to_openai(body: dict[str, Any], target_model: str) -> dict[str, Any]:
+    messages: list[dict[str, Any]] = []
+    system = _anthropic_text(body.get("system"))
+    if system:
+        messages.append({"role": "system", "content": system})
+
+    for message in body.get("messages") or []:
+        if not isinstance(message, dict):
+            continue
+        role = str(message.get("role") or "user")
+        content = message.get("content")
+        if isinstance(content, list):
+            text_parts = []
+            tool_calls = []
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                block_type = block.get("type")
+                if block_type == "text":
+                    text_parts.append(str(block.get("text") or ""))
+                elif block_type == "tool_use":
+                    tool_calls.append(
+                        {
+                            "id": block.get("id") or str(uuid.uuid4()),
+                            "type": "function",
+                            "function": {
+                                "name": block.get("name") or "",
+                                "arguments": json.dumps(block.get("input") or {}, ensure_ascii=False),
+                            },
+                        }
+                    )
+                elif block_type == "tool_result":
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": block.get("tool_use_id") or "",
+                            "content": _anthropic_text(block.get("content")),
+                        }
+                    )
+            if role == "assistant" and tool_calls:
+                messages.append({"role": "assistant", "content": "\n".join(text_parts), "tool_calls": tool_calls})
+            elif text_parts:
+                messages.append({"role": role, "content": "\n".join(text_parts)})
+        else:
+            messages.append({"role": role, "content": _anthropic_text(content)})
+
+    upstream: dict[str, Any] = {
+        "model": target_model,
+        "messages": messages,
+        "stream": bool(body.get("stream")),
+    }
+    if body.get("max_tokens") is not None:
+        upstream["max_tokens"] = body.get("max_tokens")
+    if body.get("temperature") is not None:
+        upstream["temperature"] = body.get("temperature")
+    if body.get("top_p") is not None:
+        upstream["top_p"] = body.get("top_p")
+    if body.get("stop_sequences"):
+        upstream["stop"] = body.get("stop_sequences")
+    tools = _anthropic_tools_to_openai(body.get("tools") or [])
+    if tools:
+        upstream["tools"] = tools
+    return upstream
+
+
+def _openai_usage_to_anthropic(raw_usage: dict[str, Any] | None) -> dict[str, int]:
+    usage = raw_usage or {}
+    return {
+        "input_tokens": int(usage.get("input_tokens") or usage.get("prompt_tokens") or 0),
+        "output_tokens": int(usage.get("output_tokens") or usage.get("completion_tokens") or 0),
+    }
+
+
+def _openai_stop_reason_to_anthropic(reason: str | None) -> str:
+    if reason == "tool_calls":
+        return "tool_use"
+    if reason == "length":
+        return "max_tokens"
+    if reason == "stop":
+        return "end_turn"
+    return reason or "end_turn"
+
+
+def _openai_chat_to_anthropic(payload: dict[str, Any], request_model: str, target_model: str) -> dict[str, Any]:
+    choice = (payload.get("choices") or [{}])[0] or {}
+    message = choice.get("message") or {}
+    content_blocks = []
+    text = message.get("content")
+    if text:
+        content_blocks.append({"type": "text", "text": text})
+    for call in message.get("tool_calls") or []:
+        function = call.get("function") or {}
+        try:
+            args = json.loads(function.get("arguments") or "{}")
+        except Exception:
+            args = {}
+        content_blocks.append(
+            {
+                "type": "tool_use",
+                "id": call.get("id") or str(uuid.uuid4()),
+                "name": function.get("name") or "",
+                "input": args,
+            }
+        )
+    return {
+        "id": payload.get("id") or f"msg_{uuid.uuid4().hex}",
+        "type": "message",
+        "role": "assistant",
+        "model": _extract_response_model(payload) or target_model or request_model,
+        "content": content_blocks or [{"type": "text", "text": ""}],
+        "stop_reason": _openai_stop_reason_to_anthropic(choice.get("finish_reason")),
+        "stop_sequence": None,
+        "usage": _openai_usage_to_anthropic(_extract_usage_from_payload(payload)),
+    }
+
+
 def _openai_error(message: str, status_code: int = 400) -> JSONResponse:
     return JSONResponse(
         status_code=status_code,
@@ -763,6 +951,16 @@ def api_proxy_save_status(body: ProxyEnabledBody):
     return {"ok": True, "enabled": get_proxy_enabled(), "agent_config_synced": synced}
 
 
+@app.get("/api/proxy/agents")
+def api_proxy_agents():
+    return {"agents": _agent_statuses()}
+
+
+@app.post("/api/proxy/agents/{agent_name}/sync")
+def api_proxy_sync_agent(agent_name: str, body: ProxyEnabledBody):
+    return _sync_agent_config(agent_name, body.enabled)
+
+
 @app.get("/api/proxy/active-mapping")
 def api_proxy_get_active_mapping():
     return get_active_mapping()
@@ -904,6 +1102,370 @@ async def proxy_chat_completions(request: Request):
         start_ts,
         proxy_enabled,
     )
+
+
+@app.post("/v1/messages")
+async def proxy_anthropic_messages(request: Request):
+    """Anthropic Messages-compatible proxy for Claude Code."""
+    proxy_enabled = get_proxy_enabled()
+    try:
+        body = await request.json()
+    except Exception:
+        return _anthropic_error("Request body must be JSON", 400)
+
+    request_model = str(body.get("model") or "")
+    auth_header = _request_auth_header(request)
+    if proxy_enabled:
+        target_model, provider = _select_chat_provider(request_model, auth_header)
+    else:
+        target_model, provider = _select_disabled_chat_provider(request_model, auth_header)
+
+    created_at = int(time.time())
+    start_ts = time.perf_counter()
+    should_log = bool(proxy_enabled)
+    if not provider:
+        message = (
+            "No enabled proxy provider configured"
+            if proxy_enabled
+            else "No proxy provider configured for compatibility forwarding"
+        )
+        if should_log:
+            insert_request_log(
+                request_id=str(uuid.uuid4()),
+                source_app="claude",
+                provider_id=None,
+                provider_name="",
+                endpoint="/v1/messages",
+                request_model=request_model,
+                model=target_model or request_model,
+                raw_usage=None,
+                status_code=400,
+                error_message=message,
+                latency_ms=int((time.perf_counter() - start_ts) * 1000),
+                first_token_ms=0,
+                is_streaming=bool(body.get("stream")),
+                usage_missing=True,
+                created_at=created_at,
+            )
+            _load_cache()
+        return _anthropic_error(message, 400)
+
+    upstream_body = _anthropic_messages_to_openai(body, target_model)
+    is_streaming = bool(upstream_body.get("stream"))
+    if is_streaming:
+        stream_options = dict(upstream_body.get("stream_options") or {})
+        stream_options["include_usage"] = True
+        upstream_body["stream_options"] = stream_options
+
+    upstream_url = _upstream_chat_url(provider.base_url)
+    headers = _provider_headers(
+        provider,
+        "text/event-stream" if is_streaming else "application/json",
+    )
+    if is_streaming:
+        return await _proxy_anthropic_stream(
+            upstream_url,
+            headers,
+            upstream_body,
+            provider,
+            request_model,
+            target_model,
+            created_at,
+            start_ts,
+            should_log,
+        )
+    return await _proxy_anthropic_json(
+        upstream_url,
+        headers,
+        upstream_body,
+        provider,
+        request_model,
+        target_model,
+        created_at,
+        start_ts,
+        should_log,
+    )
+
+
+def _anthropic_sse(event: str, data: dict[str, Any]) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
+async def _proxy_anthropic_json(
+    upstream_url: str,
+    headers: dict[str, str],
+    upstream_body: dict[str, Any],
+    provider,
+    request_model: str,
+    target_model: str,
+    created_at: int,
+    start_ts: float,
+    should_log: bool = True,
+):
+    import urllib.error
+    import urllib.request
+
+    request_id = str(uuid.uuid4())
+    status_code = 502
+    raw_usage = None
+    error_message = ""
+    response_model = target_model
+    anthropic_payload: dict[str, Any] | None = None
+
+    try:
+        data = json.dumps(upstream_body).encode("utf-8")
+        req = urllib.request.Request(upstream_url, data=data, headers=headers, method="POST")
+        with urllib.request.urlopen(req, timeout=600) as resp:
+            status_code = resp.status
+            content = resp.read()
+    except urllib.error.HTTPError as exc:
+        status_code = exc.code
+        content = exc.read()
+    except Exception as exc:
+        error_message = str(exc)
+        content = json.dumps({"error": {"message": error_message, "type": "proxy_error"}}).encode("utf-8")
+
+    try:
+        payload = json.loads(content.decode("utf-8"))
+        if status_code >= 400:
+            error_message = error_message or _extract_error_text(payload)
+            anthropic_payload = {
+                "type": "error",
+                "error": {
+                    "type": "api_error" if status_code >= 500 else "invalid_request_error",
+                    "message": error_message or "Upstream request failed",
+                },
+            }
+        else:
+            request_id = payload.get("id") or request_id
+            raw_usage = _extract_usage_from_payload(payload)
+            response_model = _extract_response_model(payload) or target_model
+            anthropic_payload = _openai_chat_to_anthropic(payload, request_model, target_model)
+    except Exception as exc:
+        error_message = error_message or str(exc)
+        anthropic_payload = {
+            "type": "error",
+            "error": {"type": "api_error", "message": error_message},
+        }
+        if status_code < 400:
+            status_code = 502
+
+    latency_ms = int((time.perf_counter() - start_ts) * 1000)
+    if should_log:
+        insert_request_log(
+            request_id=request_id,
+            source_app="claude",
+            provider_id=provider.id,
+            provider_name=provider.name,
+            endpoint="/v1/messages",
+            request_model=request_model,
+            model=response_model,
+            raw_usage=raw_usage,
+            status_code=status_code,
+            error_message=error_message,
+            latency_ms=latency_ms,
+            first_token_ms=latency_ms,
+            is_streaming=False,
+            usage_missing=raw_usage is None,
+            created_at=created_at,
+        )
+        _load_cache()
+    return JSONResponse(content=anthropic_payload or {}, status_code=status_code)
+
+
+async def _proxy_anthropic_stream(
+    upstream_url: str,
+    headers: dict[str, str],
+    upstream_body: dict[str, Any],
+    provider,
+    request_model: str,
+    target_model: str,
+    created_at: int,
+    start_ts: float,
+    should_log: bool = True,
+):
+    import urllib.error
+    import urllib.request
+
+    request_id = f"msg_{uuid.uuid4().hex}"
+    raw_usage = None
+    error_message = ""
+    first_token_ms = 0
+    upstream_resp = None
+    response_model = target_model
+
+    try:
+        data = json.dumps(upstream_body).encode("utf-8")
+        req = urllib.request.Request(upstream_url, data=data, headers=headers, method="POST")
+        upstream_resp = urllib.request.urlopen(req, timeout=600)
+    except urllib.error.HTTPError as exc:
+        content = exc.read()
+        error_message = content.decode("utf-8", errors="ignore")[:1000]
+        if should_log:
+            insert_request_log(
+                request_id=request_id,
+                source_app="claude",
+                provider_id=provider.id,
+                provider_name=provider.name,
+                endpoint="/v1/messages",
+                request_model=request_model,
+                model=target_model,
+                raw_usage=None,
+                status_code=exc.code,
+                error_message=error_message,
+                latency_ms=int((time.perf_counter() - start_ts) * 1000),
+                first_token_ms=0,
+                is_streaming=True,
+                usage_missing=True,
+                created_at=created_at,
+            )
+            _load_cache()
+        return _anthropic_error(error_message or "Upstream request failed", exc.code)
+    except Exception as exc:
+        error_message = str(exc)
+        if should_log:
+            insert_request_log(
+                request_id=request_id,
+                source_app="claude",
+                provider_id=provider.id,
+                provider_name=provider.name,
+                endpoint="/v1/messages",
+                request_model=request_model,
+                model=target_model,
+                raw_usage=None,
+                status_code=502,
+                error_message=error_message,
+                latency_ms=int((time.perf_counter() - start_ts) * 1000),
+                first_token_ms=0,
+                is_streaming=True,
+                usage_missing=True,
+                created_at=created_at,
+            )
+            _load_cache()
+        return _anthropic_error(error_message, 502)
+
+    status_code = upstream_resp.status
+
+    def body_iter():
+        nonlocal request_id, raw_usage, error_message, first_token_ms, response_model
+        content_started = False
+        sent_message_start = False
+        stop_reason = "end_turn"
+
+        def emit_message_start():
+            return _anthropic_sse(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": request_id,
+                        "type": "message",
+                        "role": "assistant",
+                        "model": response_model or target_model,
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 0, "output_tokens": 0},
+                    },
+                },
+            )
+
+        try:
+            pending = ""
+            while True:
+                chunk = upstream_resp.read(8192)
+                if not chunk:
+                    break
+                pending += chunk.decode("utf-8", errors="ignore")
+                while "\n" in pending:
+                    line, pending = pending.split("\n", 1)
+                    line = line.strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if not data:
+                        continue
+                    if data == "[DONE]":
+                        break
+                    try:
+                        payload = json.loads(data)
+                    except Exception:
+                        continue
+                    if payload.get("id"):
+                        request_id = str(payload["id"])
+                    if payload.get("model"):
+                        response_model = str(payload["model"])
+                    usage = _extract_usage_from_payload(payload)
+                    if usage is not None:
+                        raw_usage = usage
+                    choice = (payload.get("choices") or [{}])[0] or {}
+                    delta = choice.get("delta") or {}
+                    if choice.get("finish_reason"):
+                        stop_reason = _openai_stop_reason_to_anthropic(choice.get("finish_reason"))
+                    if not sent_message_start:
+                        sent_message_start = True
+                        yield emit_message_start()
+                    text = delta.get("content") or ""
+                    if text and first_token_ms <= 0:
+                        first_token_ms = int((time.perf_counter() - start_ts) * 1000)
+                    if text and not content_started:
+                        content_started = True
+                        yield _anthropic_sse(
+                            "content_block_start",
+                            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+                        )
+                    if text:
+                        yield _anthropic_sse(
+                            "content_block_delta",
+                            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
+                        )
+            if not sent_message_start:
+                sent_message_start = True
+                yield emit_message_start()
+            if content_started:
+                yield _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+            usage = _openai_usage_to_anthropic(raw_usage)
+            yield _anthropic_sse(
+                "message_delta",
+                {
+                    "type": "message_delta",
+                    "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+                    "usage": {"output_tokens": usage["output_tokens"]},
+                },
+            )
+            yield _anthropic_sse("message_stop", {"type": "message_stop"})
+        except GeneratorExit:
+            error_message = "client_aborted"
+            raise
+        except Exception as exc:
+            error_message = str(exc)
+            raise
+        finally:
+            latency_ms = int((time.perf_counter() - start_ts) * 1000)
+            try:
+                upstream_resp.close()
+            finally:
+                if should_log:
+                    insert_request_log(
+                        request_id=request_id,
+                        source_app="claude",
+                        provider_id=provider.id,
+                        provider_name=provider.name,
+                        endpoint="/v1/messages",
+                        request_model=request_model,
+                        model=response_model,
+                        raw_usage=raw_usage,
+                        status_code=499 if error_message == "client_aborted" else status_code,
+                        error_message=error_message,
+                        latency_ms=latency_ms,
+                        first_token_ms=first_token_ms,
+                        is_streaming=True,
+                        usage_missing=raw_usage is None,
+                        created_at=created_at,
+                    )
+                    _load_cache()
+
+    return StreamingResponse(body_iter(), status_code=status_code, media_type="text/event-stream")
 
 
 async def _proxy_chat_json(

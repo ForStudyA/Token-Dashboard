@@ -1,7 +1,9 @@
 from hermes_token_dash.adapters.base import AgentAdapter
+from hermes_token_dash.adapters.claude_code import ClaudeCodeAdapter
 from hermes_token_dash.adapters.hermes import HermesAdapter
 
 ADAPTERS: dict[str, type[AgentAdapter]] = {
+    "claude_code": ClaudeCodeAdapter,
     "hermes": HermesAdapter,
 }
 
