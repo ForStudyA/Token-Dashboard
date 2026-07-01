@@ -683,6 +683,11 @@ class TestHermesProxyPassthrough:
 
         monkeypatch.setattr(srv, "get_proxy_enabled", lambda: False)
         monkeypatch.setattr(srv, "get_provider_by_name", lambda name: None)
+        monkeypatch.setattr(
+            srv,
+            "get_active_mapping",
+            lambda agent="hermes": {"mode": "", "target_model": "", "provider_id": 0, "mapping_id": 0},
+        )
         monkeypatch.setattr(srv, "_proxy_chat_json", fake_proxy_chat_json)
 
         resp = client.post(

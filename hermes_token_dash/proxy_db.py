@@ -338,11 +338,6 @@ def get_active_mapping(agent_name: str = "hermes") -> dict[str, Any]:
     mapping_id = _get_setting(_agent_setting_key("active_mapping_id", agent_name))
     model = _get_setting(_agent_setting_key("active_model", agent_name))
     pid = _get_setting(_agent_setting_key("active_provider_id", agent_name))
-    if agent_name == "hermes" and not any((mode, mapping_id, model, pid)):
-        mode = _get_setting("active_proxy_mode")
-        mapping_id = _get_setting("active_mapping_id")
-        model = _get_setting("active_model")
-        pid = _get_setting("active_provider_id")
     result = {
         "agent_name": agent_name,
         "mode": mode,

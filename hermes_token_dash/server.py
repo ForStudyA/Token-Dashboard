@@ -495,11 +495,18 @@ def _select_chat_provider(request_model: str, auth_header: str, agent_name: str 
 
 def _select_disabled_chat_provider(request_model: str, auth_header: str, agent_name: str = "hermes"):
     """Best-effort forwarding when a running agent still points at a disabled proxy."""
+    active = _active_mapping_for_agent(agent_name)
+    mode = active.get("mode") or ("" if not active.get("target_model") else "mapping")
+    provider_id = int(active.get("provider_id") or 0)
+    if mode and provider_id:
+        provider = get_provider(provider_id)
+        if _provider_enabled(provider):
+            if mode == "passthrough":
+                return request_model, provider
+            if mode == "mapping" and active.get("target_model"):
+                return str(active["target_model"]), provider
     if _is_mimo_model(request_model):
         return request_model, _mimo_provider_from_request(auth_header, agent_name)
-    provider = _get_active_provider_for_metadata(agent_name) or _default_provider_for_agent(agent_name)
-    if _provider_enabled(provider):
-        return request_model, provider
     return request_model, None
 
 

@@ -38,3 +38,4 @@
 2026-07-01 | 已禁用 provider 路由拒绝；agent config 异步化非阻塞；原样转发按钮修复
 2026-07-02 | Claude Code adapter：读写 ~/.claude/settings.json 管理 ANTHROPIC_BASE_URL；Anthropic Messages 兼容代理 /v1/messages（含流式）；Agent 配置面板 UI；代理端点 /api/proxy/agents + sync
 2026-07-02 | 代理配置按 agent 隔离：provider/mapping/active-mapping 表增加 agent_name 字段；UI agent 切换联动刷新；/v1/chat/completions 用 hermes、/v1/messages 用 claude_code
+2026-07-02 | disabled 代理时使用映射的 URL 和模型名（不再 fallback 源模型）；移除 hermes 兼容 key fallback 避免跨 agent 共享 active 设置
